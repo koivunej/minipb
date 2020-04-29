@@ -62,8 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                     assert!(offset < *until, "got up to {} but should had stopped at {}", until, offset);
 
                     return match read.field.id {
-                        1 => Ok(Cont::ReadVec(InterestingField::PbLinkHash)),
-                        2 => Ok(Cont::ReadStr(InterestingField::PbLinkName)),
+                        1 => Ok(Cont::ReadSlice(InterestingField::PbLinkHash)),
+                        2 => Ok(Cont::ReadSlice(InterestingField::PbLinkName)),
                         3 => Ok(Cont::ReadValue(InterestingField::PbLinkTotalSize)),
                         _ => Err(Skip),
                     };
@@ -106,17 +106,17 @@ trait Matcher {
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>);
 }
 
-struct MatcherFields<M> {
+struct MatcherFields<M: Matcher> {
     offset: u64,
     reader: FieldReader,
     matcher: M,
-    state: State,
+    state: State<M::Tag>,
 }
 
-enum State {
+enum State<T> {
     Ready,
     DecidingAfter,
-    //Gathering(u64),
+    Gathering(T, u64, u64),
     //Skipping(u64),
 }
 
@@ -132,7 +132,7 @@ impl<M: Matcher> MatcherFields<M> {
 
     fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
         loop {
-            match self.state {
+            match &self.state {
                 State::DecidingAfter => {
                     let (again, maybe_tag) = self.matcher.decide_after(self.offset as usize);
 
@@ -150,6 +150,34 @@ impl<M: Matcher> MatcherFields<M> {
                         continue;
                     }
                 },
+                State::Gathering(_, _, amount) => {
+                    if (buf.len() as u64) < *amount {
+                        return Ok(Err(Status::NeedMoreBytes));
+                    }
+
+                    let amount = *amount;
+
+                    let bytes = &buf[..amount as usize];
+                    *buf = &buf[amount as usize..];
+                    self.offset += bytes.len() as u64;
+                    assert_eq!(bytes.len() as u64, amount);
+
+                    // this trick is needed to avoid Matcher::Tag: Copy
+                    let (tag, read_at) = match std::mem::replace(&mut self.state, State::DecidingAfter) {
+                        State::Gathering(tag, read_at, _) => (tag, read_at),
+                        _ => unreachable!(),
+                    };
+
+                    let ret = Matched {
+                        tag,
+                        offset: read_at,
+                        value: Value::Slice(bytes),
+                    };
+
+                    self.state = State::DecidingAfter;
+
+                    return Ok(Ok(ret));
+                }
                 State::Ready => {
                     match self.reader.next(buf)? {
                         Err(Status::IdleAtEndOfBuffer) => unreachable!(),
@@ -162,12 +190,7 @@ impl<M: Matcher> MatcherFields<M> {
                             let read_at = self.offset;
                             self.offset += consumed as u64;
 
-                            //println!("{:?}:", HexOnly(decoded));
-                            //println!("offset={:<8x} field={:?}", offset, read.field.id);
-
                             let decision = self.matcher.decide_before(read_at as usize, &read);
-
-                            //println!("decision = {:?} and {:?}", decision, state);
 
                             let ret = match decision {
                                 Ok(Cont::Message(maybe_tag)) => {
@@ -181,28 +204,21 @@ impl<M: Matcher> MatcherFields<M> {
                                         continue;
                                     }
                                 },
-                                Ok(Cont::ReadVec(tag)) => {
-                                    let bytes = &buf[..read.field_len()];
-                                    *buf = &buf[bytes.len()..];
-                                    self.offset += bytes.len() as u64;
-                                    /*println!("{:indent$}{:<4} {:?}", "", bytes.len(), HexOnly(bytes), indent = 8);*/
-                                    assert_eq!(bytes.len(), read.field_len());
+                                Ok(Cont::ReadSlice(tag)) => {
+                                    if buf.len() >= read.field_len() {
+                                        let bytes = &buf[..read.field_len()];
+                                        *buf = &buf[bytes.len()..];
+                                        self.offset += bytes.len() as u64;
+                                        assert_eq!(bytes.len(), read.field_len());
 
-                                    Matched {
-                                        tag,
-                                        offset: read_at,
-                                        value: Value::Slice(bytes),
-                                    }
-                                },
-                                Ok(Cont::ReadStr(tag)) => {
-                                    let bytes = &buf[..read.field_len()];
-                                    *buf = &buf[bytes.len()..];
-                                    self.offset += bytes.len() as u64;
-
-                                    Matched {
-                                        tag,
-                                        offset: read_at,
-                                        value: Value::Slice(bytes)
+                                        Matched {
+                                            tag,
+                                            offset: read_at,
+                                            value: Value::Slice(bytes),
+                                        }
+                                    } else {
+                                        self.state = State::Gathering(tag, read_at, read.field_len() as u64);
+                                        return Ok(Err(Status::NeedMoreBytes));
                                     }
                                 },
                                 Ok(Cont::ReadValue(tag)) => {
@@ -212,8 +228,6 @@ impl<M: Matcher> MatcherFields<M> {
                                         FieldValue::Fixed32(x) => Value::Fixed32(*x),
                                         x => unreachable!("unexpected {:?}", x),
                                     };
-
-                                    // println!("{:indent$}{:?}", "", value, indent = 8);
 
                                     Matched {
                                         tag,
@@ -225,15 +239,12 @@ impl<M: Matcher> MatcherFields<M> {
                                     let skipped = read.field_len();
                                     *buf = &buf[..skipped];
                                     continue;
-                                    //println!("{:indent$}skipped {}", "", skipped, indent = 8);
                                 }
                             };
 
                             self.state = State::DecidingAfter;
 
                             return Ok(Ok(ret));
-
-                            // how to know we are now dropping multiple levels?
                         },
                     }
                 }
@@ -252,8 +263,7 @@ struct Matched<'a, T> {
 #[derive(Debug)]
 enum Cont<T> {
     Message(Option<T>),
-    ReadStr(T),
-    ReadVec(T),
+    ReadSlice(T),
     ReadValue(T),
 }
 
