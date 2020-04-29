@@ -2,9 +2,11 @@
 
 use std::fmt;
 use std::io::Read;
+use std::borrow::Cow;
+use std::ops::Range;
 
-use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip};
-use minipb::{ReadField, Status};
+use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip, Matched, Value};
+use minipb::{ReadField, Status, DecodingError, FieldId};
 
 struct HexOnly<'a>(&'a [u8]);
 
@@ -30,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     //let mut offset = 0;
 
     #[derive(Debug)]
-    enum State {
+    enum Document {
         Top,
         Link { until: usize },
     }
@@ -42,26 +44,29 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         PbLinkHash,
         PbLinkName,
         PbLinkTotalSize,
+        PbLinkExtraField(FieldId),
+        TopExtraField(FieldId),
     }
 
-    impl Matcher for State {
+    impl Matcher for Document {
         type Tag = InterestingField;
 
         fn decide_before(
             &mut self,
             offset: usize,
             read: &ReadField<'_>,
-        ) -> Result<Cont<Self::Tag>, Skip> {
+        ) -> Result<Cont<Self::Tag>, Skip<Self::Tag>> {
+            use Document::*;
             //println!("decide({:?}, {}, {:?})", self, offset, read);
             match self {
-                State::Top if read.field_id() == 2 => {
-                    *self = State::Link {
+                Top if read.field_id() == 2 => {
+                    *self = Document::Link {
                         until: offset + read.bytes_to_skip(),
                     };
                     return Ok(Cont::Message(Some(InterestingField::StartPbLink)));
                 }
-                State::Top => {}
-                State::Link { until } => {
+                Top => {}
+                Link { until } => {
                     assert!(
                         offset < *until,
                         "got up to {} but should had stopped at {}",
@@ -73,19 +78,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                         1 => Ok(Cont::ReadSlice(InterestingField::PbLinkHash)),
                         2 => Ok(Cont::ReadSlice(InterestingField::PbLinkName)),
                         3 => Ok(Cont::ReadValue(InterestingField::PbLinkTotalSize)),
-                        _ => Err(Skip),
+                        x => Err(Skip(InterestingField::PbLinkExtraField(x))),
                     };
                 }
             }
 
-            Err(Skip)
+            Err(Skip(InterestingField::TopExtraField(read.field_id())))
         }
 
         fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>) {
+            use Document::*;
             // println!("decide_at({:?}, {})", self, offset);
             match self {
-                State::Link { until } if offset == *until => {
-                    *self = State::Top;
+                Link { until } if offset == *until => {
+                    *self = Top;
                     (false, Some(InterestingField::EndPbLink))
                 }
                 _ => (false, None),
@@ -93,7 +99,176 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
-    let mut fm = MatcherFields::new(State::Top);
+    struct PBLink<'a> {
+        hash: Cow<'a, [u8]>,
+        name: Cow<'a, str>,
+        total_size: u64,
+    }
+
+    impl fmt::Debug for PBLink<'_> {
+        fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt.debug_struct("PBLink")
+                .field("hash", &format_args!("{:?}", HexOnly(&*self.hash)))
+                .field("name", &self.name)
+                .field("total_size", &self.total_size)
+                .finish()
+        }
+    }
+
+    struct Links {
+        reader: MatcherFields<Document>,
+        indices: [Option<u64>; 2],
+        lengths: [Option<Range<u64>>; 2],
+        total_size: Option<u64>,
+    }
+
+    impl Links {
+
+        fn new() -> Self {
+            Links {
+                reader: MatcherFields::new(Document::Top),
+                indices: [None; 2],
+                lengths: [None, None],
+                total_size: None,
+            }
+        }
+
+        fn next<'a>(
+            &mut self,
+            buf: &mut &'a [u8],
+        ) -> Result<Result<PBLink<'a>, Status>, DecodingError> {
+            let mut tmp = *buf;
+            let ret = self.inner_next(&mut tmp);
+            // if buf was changed here, it would need to modify all of the ranges as well
+
+            let min = self.lengths.iter()
+                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
+                .min();
+
+            if let Some(min) = min {
+                *buf = &buf[min as usize..];
+                for range in self.lengths.iter_mut() {
+                    match range {
+                        Some(Range { ref mut start, ref mut end }) => {
+                            *start -= min;
+                            *end -= min;
+                        },
+                        _ => {}
+                    }
+                }
+            } else {
+                *buf = tmp;
+            }
+
+            ret
+        }
+
+        fn inner_next<'a>(
+            &mut self,
+            buf: &mut &'a [u8],
+        ) -> Result<Result<PBLink<'a>, Status>, DecodingError> {
+            use InterestingField::*;
+            use Status::*;
+
+            let orig: &'a [u8] = *buf;
+            let mut tmp: &'a [u8] = *buf;
+
+            let start = self.reader.offset();
+
+            // before returning this function must save the length of buf to know how long the
+            // inner reader has gone.
+            //
+            // when entering the next time, the tmp received by the self.reader must be have some
+            // amount of bytes skipped from the front
+
+            let min = self.lengths.iter()
+                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
+                .min();
+
+            if let Some(min) = min {
+                tmp = &tmp[min as usize..];
+            }
+
+            loop {
+                let (index, offset, value) = match self.reader.next(&mut tmp) {
+                    Err(e) => return Err(e),
+                    Ok(Ok(Matched { tag: StartPbLink, .. })) => continue,
+                    Ok(Ok(Matched { tag: EndPbLink, .. })) => {
+                        let parts = (self.indices[0].take(), self.indices[1].take(), self.total_size.take());
+                        let lens = (self.lengths[0].take(), self.lengths[1].take());
+
+                        if let (Some(_), Some(_), Some(total_size)) = parts {
+                            let (xr, yr) = (lens.0.unwrap(), lens.1.unwrap());
+
+                            // the issue here is that the indices are correct only on the first
+                            // PBLink we return
+
+                            let hash = Cow::Borrowed(&orig[xr.start as usize..xr.end as usize]);
+                            let name = &orig[yr.start as usize..yr.end as usize];
+
+                            let name = std::str::from_utf8(name)
+                                .unwrap_or_else(|e| panic!("failed to convert {:?} to str: {}", HexOnly(name), e));
+
+                            let name = Cow::Borrowed(name);
+                            *buf = tmp;
+                            return Ok(Ok(PBLink {
+                                hash,
+                                name,
+                                total_size,
+                            }));
+                        } else {
+                            panic!("read partial pblink:\n\
+                                parts: {:?}\n\
+                                lens:  {:?}\n", parts, lens);
+                        }
+                    }
+                    Ok(Err(IdleAtEndOfBuffer)) => return Ok(Err(IdleAtEndOfBuffer)),
+                    Ok(Err(NeedMoreBytes)) => {
+                        // return Ok(Err(NeedMoreBytes));
+                        todo!("need to keep the lowest used byte offset alive")
+                    }
+                    Ok(Ok(Matched { tag: PbLinkHash, offset, value })) => {
+                        (0, offset, value)
+                    }
+                    Ok(Ok(Matched { tag: PbLinkName, offset, value })) => {
+                        (1, offset, value)
+                    }
+                    Ok(Ok(Matched { tag: PbLinkTotalSize, value, .. })) => {
+                        if let Value::Varint(value) = value {
+                            self.total_size = Some(value);
+                        }
+                        continue;
+                    }
+                    Ok(Ok(ignored)) => {
+                        println!("ignored {:?}", ignored);
+                        continue;
+                    }
+                };
+
+                self.indices[index] = Some(offset);
+                self.lengths[index] = Some(match value {
+                    Value::Slice(Range { start: s, end: e }) => (s - start)..(e - start),
+                    _ => unreachable!()
+                });
+            }
+
+        }
+    }
+
+    let mut links = Links::new();
+
+    let mut buf = &buffer[..];
+
+    loop {
+        match links.next(&mut buf)? {
+            Ok(matched) => println!("{:?}", matched),
+            Err(x) => panic!("{:?}", x),
+        }
+    }
+
+
+
+    let mut fm = MatcherFields::new(Document::Top);
 
     /*
     loop {

@@ -1,6 +1,7 @@
 use crate::field_reader::FieldReader;
 use crate::{DecodingError, FieldValue, ReadField, Status};
 use std::borrow::Cow;
+use std::ops::Range;
 
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
@@ -15,7 +16,7 @@ pub trait Matcher {
         &mut self,
         offset: usize,
         read: &ReadField<'_>,
-    ) -> Result<Cont<Self::Tag>, Skip>;
+    ) -> Result<Cont<Self::Tag>, Skip<Self::Tag>>;
 
     /// Advance the matcher after a field has been processed. Depending on the return value this
     /// can be called many times in order for the Matcher ot highligh which objects have ended at
@@ -37,8 +38,8 @@ pub struct MatcherFields<M: Matcher> {
 enum State<T> {
     Ready,
     DecidingAfter,
-    Gathering(T, u64, u64),
-    Skipping(u64),
+    Gathering(T, u64, u64, u64),
+    Skipping(T, u64, u64, u64),
 }
 
 impl<M: Matcher> MatcherFields<M> {
@@ -65,9 +66,9 @@ impl<M: Matcher> MatcherFields<M> {
     pub fn next<'a>(
         &mut self,
         buf: &mut &'a [u8],
-    ) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
+    ) -> Result<Result<Matched<M::Tag>, Status>, DecodingError> {
         loop {
-            match &self.state {
+            match &mut self.state {
                 State::DecidingAfter => {
                     let (again, maybe_tag) = self.matcher.decide_after(self.offset as usize);
 
@@ -85,7 +86,7 @@ impl<M: Matcher> MatcherFields<M> {
                         continue;
                     }
                 }
-                State::Gathering(_, _, amount) => {
+                State::Gathering(_, _, _, amount) => {
                     if (buf.len() as u64) < *amount {
                         return Ok(Err(Status::NeedMoreBytes));
                     }
@@ -93,41 +94,53 @@ impl<M: Matcher> MatcherFields<M> {
                     let amount = *amount;
 
                     let bytes = &buf[..amount as usize];
-                    *buf = &buf[amount as usize..];
-                    self.offset += bytes.len() as u64;
                     assert_eq!(bytes.len() as u64, amount);
 
+                    *buf = &buf[amount as usize..];
+                    self.offset += amount as u64;
+
                     // this trick is needed to avoid Matcher::Tag: Copy
-                    let (tag, read_at) =
+                    let (tag, read_at, start) =
                         match std::mem::replace(&mut self.state, State::DecidingAfter) {
-                            State::Gathering(tag, read_at, _) => (tag, read_at),
+                            State::Gathering(tag, read_at, start, _) => (tag, read_at, start),
                             _ => unreachable!(),
                         };
 
                     let ret = Matched {
                         tag,
                         offset: read_at,
-                        value: Value::Slice(Cow::Borrowed(bytes)),
+                        value: Value::Slice(start..self.offset),
                     };
 
                     self.state = State::DecidingAfter;
 
                     return Ok(Ok(ret));
                 }
-                State::Skipping(amount) => {
-                    let amount = *amount;
+                State::Skipping(_, _, _, amount) => {
+                    let amt = *amount;
 
-                    if buf.len() as u64 >= amount {
-                        *buf = &buf[amount as usize..];
-                        self.offset += amount as u64;
-                        self.state = State::Ready;
-                    } else {
-                        let available = buf.len();
-                        *buf = &buf[buf.len()..];
-                        self.offset += available as u64;
-                        self.state = State::Skipping(amount - available as u64);
-                        return Ok(Err(Status::NeedMoreBytes));
+                    let skipped = amt.min(buf.len() as u64);
+
+                    self.offset += skipped as u64;
+                    *buf = &buf[skipped as usize..];
+
+                    let remaining = amt - skipped;
+
+                    if remaining == 0 {
+                        let (tag, read_at, start) =
+                            match std::mem::replace(&mut self.state, State::DecidingAfter) {
+                                State::Skipping(tag, read_at, start, _) => (tag, read_at, start),
+                                _ => unreachable!(),
+                            };
+                        return Ok(Ok(Matched {
+                            tag,
+                            offset: read_at,
+                            value: Value::Slice(start..self.offset),
+                        }));
                     }
+
+                    *amount = remaining;
+                    return Ok(Err(Status::NeedMoreBytes));
                 }
                 State::Ready => match self.reader.next(buf)? {
                     Err(s) => return Ok(Err(s)),
@@ -153,8 +166,8 @@ impl<M: Matcher> MatcherFields<M> {
                                 }
                             }
                             Ok(Cont::ReadSlice(tag)) => {
-                                self.state =
-                                    State::Gathering(tag, read_at, read.field_len() as u64);
+                                self.state = State::Gathering(
+                                    tag, read_at, self.offset, read.field_len() as u64);
                                 continue;
                             }
                             Ok(Cont::ReadValue(tag)) => {
@@ -171,9 +184,9 @@ impl<M: Matcher> MatcherFields<M> {
                                     value,
                                 }
                             }
-                            Err(Skip) => {
+                            Err(Skip(tag)) => {
                                 let total = read.field_len();
-                                self.state = State::Skipping(total as u64);
+                                self.state = State::Skipping(tag, read_at, self.offset, total as u64);
                                 continue;
                             }
                         };
@@ -199,10 +212,10 @@ impl<M: Matcher + PartialEq> MatcherFields<M> {
 /// An item tagged by a [`Matcher`] from the stream of fields read by
 /// [`MatcherFields`].
 #[derive(Debug)]
-pub struct Matched<'a, T> {
+pub struct Matched<T> {
     pub tag: T,
     pub offset: u64,
-    pub value: Value<'a>,
+    pub value: Value,
 }
 
 /// Instruction to process the field as follows, with the given tag.
@@ -220,8 +233,8 @@ pub enum Cont<T> {
 }
 
 /// Represents a matched value.
-#[derive(Debug)]
-pub enum Value<'a> {
+#[derive(Debug, Clone)]
+pub enum Value {
     /// Value does not exist in the stream, but it represents a state change taken by the
     /// [`Matcher`].
     Marker,
@@ -232,9 +245,18 @@ pub enum Value<'a> {
     /// Value read as a [`WireType::Fixed32`]
     Fixed32(u32),
     /// A length delimited field read as slice.
-    Slice(Cow<'a, [u8]>),
+    Slice(Range<u64>),
+}
+
+impl Value {
+    pub fn slice_len(&self) -> Result<usize, ()> {
+        match self {
+            Value::Slice(Range { start, end }) => Ok((end - start) as usize),
+            _ => Err(())
+        }
+    }
 }
 
 /// Represents an instruction to skip the current field. Good default.
 #[derive(Debug)]
-pub struct Skip;
+pub struct Skip<T>(pub T);
