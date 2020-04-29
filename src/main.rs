@@ -1,7 +1,6 @@
 #![warn(rust_2018_idioms)]
-#![allow(dead_code, unused)]
 
-use std::io::{self, BufRead, Read};
+use std::io::Read;
 use std::fmt;
 use std::convert::TryFrom;
 
@@ -16,10 +15,6 @@ impl<'a> fmt::Debug for HexOnly<'a> {
     }
 }
 
-// 2 -> 1' hash
-// 2 -> 2' name
-// 2 -> 3' tsize
-
 fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let stdin = std::io::stdin();
     let mut locked = stdin.lock();
@@ -27,10 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let mut buffer = Vec::new();
     locked.read_to_end(&mut buffer)?;
 
-    let mut reader = FieldReader::default();
+    //let mut reader = FieldReader::default();
 
-    let mut buf = &buffer[..];
-    let mut offset = 0;
+    //let mut buf = &buffer[..];
+    //let mut offset = 0;
 
     #[derive(Debug)]
     enum State {
@@ -68,7 +63,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                         _ => Err(Skip),
                     };
                 },
-                _ => unreachable!()
             }
 
             Err(Skip)
@@ -131,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 }
 
 /// State machine one needs to write in order to know how to handle nested fields.
-trait Matcher {
+pub trait Matcher {
     /// Tag describing to caller how to process the field
     type Tag;
 
@@ -150,7 +144,8 @@ trait Matcher {
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>);
 }
 
-struct MatcherFields<M: Matcher> {
+/// Uses an [`Matcher`] to match tagged fields from a [`FieldReader`].
+pub struct MatcherFields<M: Matcher> {
     offset: u64,
     reader: FieldReader,
     matcher: M,
@@ -165,7 +160,7 @@ enum State<T> {
 }
 
 impl<M: Matcher> MatcherFields<M> {
-    fn new(matcher: M) -> Self {
+    pub fn new(matcher: M) -> Self {
         Self {
             offset: 0,
             reader: FieldReader::default(),
@@ -174,11 +169,18 @@ impl<M: Matcher> MatcherFields<M> {
         }
     }
 
-    fn offset(&self) -> u64 {
+    pub fn offset(&self) -> u64 {
         self.offset
     }
 
-    fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
+    pub fn is_idle(&self) -> bool {
+        match self.state {
+            State::Ready => true,
+            _ => false,
+        }
+    }
+
+    pub fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
         loop {
             match &self.state {
                 State::DecidingAfter => {
@@ -247,7 +249,7 @@ impl<M: Matcher> MatcherFields<M> {
                         Err(s) => return Ok(Err(s)),
                         Ok(read) => {
                             let consumed = read.consumed();
-                            let decoded = &buf[..consumed];
+                            let _decoded = &buf[..consumed];
                             *buf = &buf[consumed..];
                             let read_at = self.offset;
                             self.offset += consumed as u64;
@@ -324,44 +326,54 @@ impl<M: Matcher> MatcherFields<M> {
     }
 }
 
+/// An item tagged by a [`Matcher`] from the stream of fields read by
+/// [`MatcherFields`].
 #[derive(Debug)]
-struct Matched<'a, T> {
-    tag: T,
-    offset: u64,
-    value: Value<'a>,
+pub struct Matched<'a, T> {
+    pub tag: T,
+    pub offset: u64,
+    pub value: Value<'a>,
 }
 
 /// Instruction to process the field as follows, with the given tag.
 #[derive(Debug)]
-enum Cont<T> {
+pub enum Cont<T> {
     /// Start processing the field as a nested message. Outputs the given tag to mark this.
     Message(Option<T>),
     /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
     /// amount available. This will require the caller to buffer this much data.
     ReadSlice(T),
+    // FIXME: here could be a ReadPartialSlice to stream bytes when they arrive, that will require
+    // though cloneable tags, which wouldn't be a huge deal.
     /// Process the field as non-length delimited field with the given tag.
     ReadValue(T),
 }
 
 /// Represents a matched value.
 #[derive(Debug)]
-enum Value<'a> {
+pub enum Value<'a> {
+    /// Value does not exist in the stream, but it represents a state change taken by the
+    /// [`Matcher`].
     Marker,
+    /// Number read as a [`WireType::Varint`]
     Varint(u64),
+    /// Value read as a [`WireType::Fixed64`]
     Fixed64(u64),
+    /// Value read as a [`WireType::Fixed32`]
     Fixed32(u32),
+    /// A length delimited field read as slice.
     Slice(&'a [u8]),
 }
 
 /// Represents an instruction to skip the current field. Good default.
 #[derive(Debug)]
-struct Skip;
+pub struct Skip;
 
 pub type FieldId = u32;
 
 /// Supported protobuf wire types. Note, that BeginGroup and EndGroup are not supported.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum WireType {
+pub enum WireType {
     Varint,
     Fixed64,
     LengthDelimited,
@@ -388,7 +400,7 @@ impl TryFrom<u32> for WireType {
 struct NeedMoreBytes;
 
 #[derive(Debug)]
-enum Status {
+pub enum Status {
     /// Would like to read the next item but there are no more bytes in the buffer. This could be
     /// because the input has been fully exhausted (end of file).
     IdleAtEndOfBuffer,
@@ -399,7 +411,7 @@ enum Status {
 
 
 #[derive(Debug)]
-struct ReadField<'a> {
+pub struct ReadField<'a> {
     /// How many bytes were consumed from the beginning of the buffer
     consumed: usize,
     /// The actual read field, which can be used to skip the field.
@@ -578,8 +590,9 @@ fn read_varint(data: &[u8], max_bytes: usize) -> Result<Result<(usize, u64), Nee
     }
 }
 
+/// Represents either a bug in this crate, or an error in the protobuf bytes.
 #[derive(Debug)]
-enum DecodingError {
+pub enum DecodingError {
     UnsupportedGroupWireType(u32),
     UnknownWireType(u32),
     TooManyVarint32Bytes,
@@ -601,33 +614,3 @@ impl fmt::Display for DecodingError {
 }
 
 impl std::error::Error for DecodingError {}
-
-#[derive(Debug)]
-enum Error {
-    Decoding(DecodingError),
-    IO(std::io::Error),
-}
-
-impl From<DecodingError> for Error {
-    fn from(e: DecodingError) -> Self {
-        Self::Decoding(e)
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Self::IO(e)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Error::*;
-        match *self {
-            Decoding(ref e) => write!(fmt, "Decoding: {:?}", e),
-            IO(ref e) => write!(fmt, "IO: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
