@@ -14,4 +14,7 @@ this crate might be interesting for you. The idea is to provide an
 implementation which can be used to help seeking a large file and pull only the
 interesting parts out.
 
+The way to read messages provided by this crate is not great, while it supports
+returning structs it has to be in an way that hasn't yet been explored.
+
 [protobuf is not good for large files or messages]: https://developers.google.com/protocol-buffers/docs/techniques#large-data
