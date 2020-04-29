@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     #[derive(Debug)]
     enum InterestingField {
         StartPbLink,
+        EndPbLink,
         PbLinkHash,
         PbLinkName,
         PbLinkTotalSize,
@@ -73,13 +74,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             Err(Skip)
         }
 
-        fn decide_after(&mut self, offset: usize) {
+        fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>) {
             // println!("decide_at({:?}, {})", self, offset);
             match self {
                 State::Link { until } if offset == *until => {
                     *self = State::Top;
+                    (false, Some(InterestingField::EndPbLink))
                 },
-                _ => {}
+                _ => (false, None),
             }
         }
     }
@@ -101,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 trait Matcher {
     type Tag;
     fn decide_before(&mut self, offset: usize, read: &ReadField<'_>) -> Result<Cont<Self::Tag>, Skip>;
-    fn decide_after(&mut self, offset: usize);
+    fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>);
 }
 
 struct MatcherFields<M> {
@@ -113,8 +115,9 @@ struct MatcherFields<M> {
 
 enum State {
     Ready,
-    Gathering(u64),
-    Skipping(u64),
+    DecidingAfter,
+    //Gathering(u64),
+    //Skipping(u64),
 }
 
 impl<M: Matcher> MatcherFields<M> {
@@ -129,90 +132,111 @@ impl<M: Matcher> MatcherFields<M> {
 
     fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
         loop {
-            match self.reader.next(buf)? {
-                Err(Status::IdleAtEndOfBuffer) => unreachable!(),
-                Err(Status::NeedMoreBytes) => unreachable!(),
-                Ok(read) => {
+            match self.state {
+                State::DecidingAfter => {
+                    let (again, maybe_tag) = self.matcher.decide_after(self.offset as usize);
 
-                    let consumed = read.consumed();
-                    let decoded = &buf[..consumed];
-                    *buf = &buf[consumed..];
-                    let read_at = self.offset;
-                    self.offset += consumed as u64;
+                    if !again {
+                        self.state = State::Ready;
+                    }
 
-                    //println!("{:?}:", HexOnly(decoded));
-                    //println!("offset={:<8x} field={:?}", offset, read.field.id);
+                    if let Some(tag) = maybe_tag {
+                        return Ok(Ok(Matched {
+                            tag,
+                            offset: self.offset,
+                            value: Value::Marker,
+                        }));
+                    } else {
+                        continue;
+                    }
+                },
+                State::Ready => {
+                    match self.reader.next(buf)? {
+                        Err(Status::IdleAtEndOfBuffer) => unreachable!(),
+                        Err(Status::NeedMoreBytes) => unreachable!(),
+                        Ok(read) => {
 
-                    let decision = self.matcher.decide_before(read_at as usize, &read);
+                            let consumed = read.consumed();
+                            let decoded = &buf[..consumed];
+                            *buf = &buf[consumed..];
+                            let read_at = self.offset;
+                            self.offset += consumed as u64;
 
-                    //println!("decision = {:?} and {:?}", decision, state);
+                            //println!("{:?}:", HexOnly(decoded));
+                            //println!("offset={:<8x} field={:?}", offset, read.field.id);
 
-                    let ret = match decision {
-                        Ok(Cont::Message(maybe_tag)) => {
-                            if let Some(tag) = maybe_tag {
-                                Matched {
-                                    tag,
-                                    offset: read_at,
-                                    value: Value::Marker,
+                            let decision = self.matcher.decide_before(read_at as usize, &read);
+
+                            //println!("decision = {:?} and {:?}", decision, state);
+
+                            let ret = match decision {
+                                Ok(Cont::Message(maybe_tag)) => {
+                                    if let Some(tag) = maybe_tag {
+                                        Matched {
+                                            tag,
+                                            offset: read_at,
+                                            value: Value::Marker,
+                                        }
+                                    } else {
+                                        continue;
+                                    }
+                                },
+                                Ok(Cont::ReadVec(tag)) => {
+                                    let bytes = &buf[..read.field_len()];
+                                    *buf = &buf[bytes.len()..];
+                                    self.offset += bytes.len() as u64;
+                                    /*println!("{:indent$}{:<4} {:?}", "", bytes.len(), HexOnly(bytes), indent = 8);*/
+                                    assert_eq!(bytes.len(), read.field_len());
+
+                                    Matched {
+                                        tag,
+                                        offset: read_at,
+                                        value: Value::Slice(bytes),
+                                    }
+                                },
+                                Ok(Cont::ReadStr(tag)) => {
+                                    let bytes = &buf[..read.field_len()];
+                                    *buf = &buf[bytes.len()..];
+                                    self.offset += bytes.len() as u64;
+
+                                    Matched {
+                                        tag,
+                                        offset: read_at,
+                                        value: Value::Slice(bytes)
+                                    }
+                                },
+                                Ok(Cont::ReadValue(tag)) => {
+                                    let value = match &read.field.value {
+                                        FieldValue::Varint(x) => Value::Varint(*x),
+                                        FieldValue::Fixed64(x) => Value::Fixed64(*x),
+                                        FieldValue::Fixed32(x) => Value::Fixed32(*x),
+                                        x => unreachable!("unexpected {:?}", x),
+                                    };
+
+                                    // println!("{:indent$}{:?}", "", value, indent = 8);
+
+                                    Matched {
+                                        tag,
+                                        offset: read_at,
+                                        value
+                                    }
+                                },
+                                Err(Skip) => {
+                                    let skipped = read.field_len();
+                                    *buf = &buf[..skipped];
+                                    continue;
+                                    //println!("{:indent$}skipped {}", "", skipped, indent = 8);
                                 }
-                            } else {
-                                continue;
-                            }
-                        },
-                        Ok(Cont::ReadVec(tag)) => {
-                            let bytes = &buf[..read.field_len()];
-                            *buf = &buf[bytes.len()..];
-                            self.offset += bytes.len() as u64;
-                            /*println!("{:indent$}{:<4} {:?}", "", bytes.len(), HexOnly(bytes), indent = 8);*/
-                            assert_eq!(bytes.len(), read.field_len());
-
-                            Matched {
-                                tag,
-                                offset: read_at,
-                                value: Value::Slice(bytes),
-                            }
-                        },
-                        Ok(Cont::ReadStr(tag)) => {
-                            let bytes = &buf[..read.field_len()];
-                            *buf = &buf[bytes.len()..];
-                            self.offset += bytes.len() as u64;
-
-                            Matched {
-                                tag,
-                                offset: read_at,
-                                value: Value::Slice(bytes)
-                            }
-                        },
-                        Ok(Cont::ReadValue(tag)) => {
-                            let value = match &read.field.value {
-                                FieldValue::Varint(x) => Value::Varint(*x),
-                                FieldValue::Fixed64(x) => Value::Fixed64(*x),
-                                FieldValue::Fixed32(x) => Value::Fixed32(*x),
-                                x => unreachable!("unexpected {:?}", x),
                             };
 
-                            // println!("{:indent$}{:?}", "", value, indent = 8);
+                            self.state = State::DecidingAfter;
 
-                            Matched {
-                                tag,
-                                offset: read_at,
-                                value
-                            }
+                            return Ok(Ok(ret));
+
+                            // how to know we are now dropping multiple levels?
                         },
-                        Err(Skip) => {
-                            let skipped = read.field_len();
-                            *buf = &buf[..skipped];
-                            continue;
-                            //println!("{:indent$}skipped {}", "", skipped, indent = 8);
-                        }
-                    };
-
-                    self.matcher.decide_after(self.offset as usize);
-
-                    return Ok(Ok(ret));
-
-                    // how to know we are now dropping multiple levels?
-                },
+                    }
+                }
             }
         }
     }
