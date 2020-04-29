@@ -201,6 +201,14 @@ impl<M: Matcher> MatcherFields<M> {
             }
         }
     }
+
+    pub fn into_matcher(self) -> M {
+        self.matcher
+    }
+}
+
+impl<M: Matcher + PartialEq> MatcherFields<M> {
+    // TODO: something to advance to wanted matcher state
 }
 
 /// An item tagged by a [`Matcher`] from the stream of fields read by
