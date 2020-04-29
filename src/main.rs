@@ -130,9 +130,23 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     Ok(())
 }
 
+/// State machine one needs to write in order to know how to handle nested fields.
 trait Matcher {
+    /// Tag describing to caller how to process the field
     type Tag;
+
+    /// Advance the matcher on a new field read.
+    ///
+    /// Returns the direction to take with the field with either Cont or Skip. Cont'd fields need
+    /// to be tagged.
     fn decide_before(&mut self, offset: usize, read: &ReadField<'_>) -> Result<Cont<Self::Tag>, Skip>;
+
+    /// Advance the matcher after a field has been processed. Depending on the return value this
+    /// can be called many times in order for the Matcher ot highligh which objects have ended at
+    /// this location with valueless tags.
+    ///
+    /// Return `(true, _)` if this method needs to be called again on the same offset, `(false, _)`
+    /// otherwise.
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>);
 }
 
@@ -317,13 +331,19 @@ struct Matched<'a, T> {
     value: Value<'a>,
 }
 
+/// Instruction to process the field as follows, with the given tag.
 #[derive(Debug)]
 enum Cont<T> {
+    /// Start processing the field as a nested message. Outputs the given tag to mark this.
     Message(Option<T>),
+    /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
+    /// amount available. This will require the caller to buffer this much data.
     ReadSlice(T),
+    /// Process the field as non-length delimited field with the given tag.
     ReadValue(T),
 }
 
+/// Represents a matched value.
 #[derive(Debug)]
 enum Value<'a> {
     Marker,
@@ -333,11 +353,13 @@ enum Value<'a> {
     Slice(&'a [u8]),
 }
 
+/// Represents an instruction to skip the current field. Good default.
 #[derive(Debug)]
 struct Skip;
 
 pub type FieldId = u32;
 
+/// Supported protobuf wire types. Note, that BeginGroup and EndGroup are not supported.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum WireType {
     Varint,
@@ -360,8 +382,6 @@ impl TryFrom<u32> for WireType {
         })
     }
 }
-
-struct LengthDelimited;
 
 /// All of the bytes still remaining in the buffer need to be kept, but more bytes should be read.
 #[derive(Debug)]
