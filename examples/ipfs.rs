@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip, Matched, Value};
-use minipb::{ReadField, Status, DecodingError, FieldId};
+use minipb::{ReadField, Status, DecodingError, FieldId, Reader};
 
 struct HexOnly<'a>(&'a [u8]);
 
@@ -70,8 +70,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                     assert!(
                         offset < *until,
                         "got up to {} but should had stopped at {}",
+                        offset,
                         until,
-                        offset
                     );
 
                     return match read.field_id() {
@@ -117,23 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     struct Links {
         reader: MatcherFields<Document>,
-        indices: [Option<u64>; 2],
         lengths: [Option<Range<u64>>; 2],
         total_size: Option<u64>,
     }
 
-    impl Links {
-
-        fn new() -> Self {
-            Links {
-                reader: MatcherFields::new(Document::Top),
-                indices: [None; 2],
-                lengths: [None, None],
-                total_size: None,
-            }
-        }
-
-        fn next<'a>(
+    impl<'a> Reader<'a, PBLink<'a>> for Links {
+        fn next(
             &mut self,
             buf: &mut &'a [u8],
         ) -> Result<Result<PBLink<'a>, Status>, DecodingError> {
@@ -162,6 +151,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
             ret
         }
+    }
+
+    impl Links {
+
+        fn new() -> Self {
+            Links {
+                reader: MatcherFields::new(Document::Top),
+                lengths: [None, None],
+                total_size: None,
+            }
+        }
+
 
         fn inner_next<'a>(
             &mut self,
@@ -190,16 +191,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             }
 
             loop {
-                let (index, offset, value) = match self.reader.next(&mut tmp) {
-                    Err(e) => return Err(e),
-                    Ok(Ok(Matched { tag: StartPbLink, .. })) => continue,
-                    Ok(Ok(Matched { tag: EndPbLink, .. })) => {
-                        let parts = (self.indices[0].take(), self.indices[1].take(), self.total_size.take());
-                        let lens = (self.lengths[0].take(), self.lengths[1].take());
+                let (index, value) = match self.reader.next(&mut tmp)? {
+                    Ok(Matched { tag: StartPbLink, .. }) => continue,
+                    Ok(Matched { tag: EndPbLink, .. }) => {
+                        let lens = (self.lengths[0].take(), self.lengths[1].take(), self.total_size.take());
 
-                        if let (Some(_), Some(_), Some(total_size)) = parts {
-                            let (xr, yr) = (lens.0.unwrap(), lens.1.unwrap());
-
+                        if let (Some(xr), Some(yr), Some(total_size)) = lens {
                             // the issue here is that the indices are correct only on the first
                             // PBLink we return
 
@@ -218,34 +215,29 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                             }));
                         } else {
                             panic!("read partial pblink:\n\
-                                parts: {:?}\n\
-                                lens:  {:?}\n", parts, lens);
+                                lens:  {:?}\n", lens);
                         }
                     }
-                    Ok(Err(IdleAtEndOfBuffer)) => return Ok(Err(IdleAtEndOfBuffer)),
-                    Ok(Err(NeedMoreBytes)) => {
-                        // return Ok(Err(NeedMoreBytes));
-                        todo!("need to keep the lowest used byte offset alive")
+                    Err(IdleAtEndOfBuffer) => return Ok(Err(IdleAtEndOfBuffer)),
+                    Err(NeedMoreBytes) => return Ok(Err(NeedMoreBytes)),
+                    Ok(Matched { tag: PbLinkHash, value, .. }) => {
+                        (0, value)
                     }
-                    Ok(Ok(Matched { tag: PbLinkHash, offset, value })) => {
-                        (0, offset, value)
+                    Ok(Matched { tag: PbLinkName, value, .. }) => {
+                        (1, value)
                     }
-                    Ok(Ok(Matched { tag: PbLinkName, offset, value })) => {
-                        (1, offset, value)
-                    }
-                    Ok(Ok(Matched { tag: PbLinkTotalSize, value, .. })) => {
+                    Ok(Matched { tag: PbLinkTotalSize, value, .. }) => {
                         if let Value::Varint(value) = value {
                             self.total_size = Some(value);
                         }
                         continue;
                     }
-                    Ok(Ok(ignored)) => {
+                    Ok(ignored) => {
                         println!("ignored {:?}", ignored);
                         continue;
                     }
                 };
 
-                self.indices[index] = Some(offset);
                 self.lengths[index] = Some(match value {
                     Value::Slice(Range { start: s, end: e }) => (s - start)..(e - start),
                     _ => unreachable!()
@@ -256,17 +248,45 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     }
 
     let mut links = Links::new();
-
     let mut buf = &buffer[..];
 
-    loop {
+    /*loop {
         match links.next(&mut buf)? {
             Ok(matched) => println!("{:?}", matched),
             Err(x) => panic!("{:?}", x),
         }
+    }*/
+
+    let mut copies = Vec::new();
+    let mut offset = 0;
+    copies.push(buffer[offset]);
+    offset += 1;
+
+    loop {
+        let orig_len = copies.len();
+        let mut buf = &copies[..];
+        match links.next(&mut buf)? {
+            Ok(matched) => {
+                println!("{:?}", matched);
+                let consumed = orig_len - buf.len();
+                copies.drain(..consumed);
+            }
+            Err(Status::IdleAtEndOfBuffer) => {
+                if offset != buffer.len() {
+                    copies.push(buffer[offset]);
+                    offset += 1;
+                } else {
+                    break;
+                }
+            }
+            Err(Status::NeedMoreBytes) => {
+                let consumed = orig_len - buf.len();
+                copies.drain(..consumed);
+                copies.push(buffer[offset]);
+                offset += 1;
+            }
+        }
     }
-
-
 
     let mut fm = MatcherFields::new(Document::Top);
 

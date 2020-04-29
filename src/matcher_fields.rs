@@ -1,6 +1,5 @@
 use crate::field_reader::FieldReader;
 use crate::{DecodingError, FieldValue, ReadField, Status};
-use std::borrow::Cow;
 use std::ops::Range;
 
 /// State machine one needs to write in order to know how to handle nested fields.

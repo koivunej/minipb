@@ -137,3 +137,7 @@ impl fmt::Display for DecodingError {
 }
 
 impl std::error::Error for DecodingError {}
+
+pub trait Reader<'a, T: 'a> {
+    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<T, Status>, DecodingError>;
+}
