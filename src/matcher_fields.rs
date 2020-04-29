@@ -153,22 +153,9 @@ impl<M: Matcher> MatcherFields<M> {
                                 }
                             }
                             Ok(Cont::ReadSlice(tag)) => {
-                                if buf.len() >= read.field_len() {
-                                    let bytes = &buf[..read.field_len()];
-                                    *buf = &buf[bytes.len()..];
-                                    self.offset += bytes.len() as u64;
-                                    assert_eq!(bytes.len(), read.field_len());
-
-                                    Matched {
-                                        tag,
-                                        offset: read_at,
-                                        value: Value::Slice(Cow::Borrowed(bytes)),
-                                    }
-                                } else {
-                                    self.state =
-                                        State::Gathering(tag, read_at, read.field_len() as u64);
-                                    return Ok(Err(Status::NeedMoreBytes));
-                                }
+                                self.state =
+                                    State::Gathering(tag, read_at, read.field_len() as u64);
+                                continue;
                             }
                             Ok(Cont::ReadValue(tag)) => {
                                 let value = match &read.field.value {
@@ -186,16 +173,7 @@ impl<M: Matcher> MatcherFields<M> {
                             }
                             Err(Skip) => {
                                 let total = read.field_len();
-                                let skipped = read.field_len().min(buf.len());
-
-                                *buf = &buf[..skipped];
-                                self.offset += skipped as u64;
-
-                                if skipped < total {
-                                    self.state = State::Skipping((total - skipped) as u64);
-                                    return Ok(Err(Status::NeedMoreBytes));
-                                }
-
+                                self.state = State::Skipping(total as u64);
                                 continue;
                             }
                         };
