@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     #[derive(Debug)]
     enum InterestingField {
+        StartPbLink,
         PbLinkHash,
         PbLinkName,
         PbLinkTotalSize,
@@ -53,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             match self {
                 State::Top if read.field.id == 2 => {
                     *self = State::Link { until: offset + read.bytes_to_skip() };
-                    return Ok(Cont::Message)
+                    return Ok(Cont::Message(Some(InterestingField::StartPbLink)))
                 },
                 State::Top => {},
                 State::Link { until } => {
@@ -124,7 +125,6 @@ impl<M: Matcher> MatcherFields<M> {
             matcher,
             state: State::Ready,
         }
-
     }
 
     fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
@@ -147,38 +147,41 @@ impl<M: Matcher> MatcherFields<M> {
 
                     //println!("decision = {:?} and {:?}", decision, state);
 
-                    match decision {
-                        Ok(Cont::Message) => {},
+                    let ret = match decision {
+                        Ok(Cont::Message(maybe_tag)) => {
+                            if let Some(tag) = maybe_tag {
+                                Matched {
+                                    tag,
+                                    offset: read_at,
+                                    value: Value::Marker,
+                                }
+                            } else {
+                                continue;
+                            }
+                        },
                         Ok(Cont::ReadVec(tag)) => {
                             let bytes = &buf[..read.field_len()];
                             *buf = &buf[bytes.len()..];
                             self.offset += bytes.len() as u64;
                             /*println!("{:indent$}{:<4} {:?}", "", bytes.len(), HexOnly(bytes), indent = 8);*/
                             assert_eq!(bytes.len(), read.field_len());
-                            self.matcher.decide_after(self.offset as usize);
 
-                            return Ok(Ok(Matched {
+                            Matched {
                                 tag,
                                 offset: read_at,
                                 value: Value::Slice(bytes),
-                            }));
+                            }
                         },
                         Ok(Cont::ReadStr(tag)) => {
                             let bytes = &buf[..read.field_len()];
                             *buf = &buf[bytes.len()..];
                             self.offset += bytes.len() as u64;
-                            /*if let Ok(s) = std::str::from_utf8(bytes) {
-                                println!("{:indent$}{:?}", "", s, indent = 8);
-                            } else {
-                                println!("{:indent$}{:?}", "", HexOnly(bytes), indent = 8);
-                            }*/
-                            self.matcher.decide_after(self.offset as usize);
 
-                            return Ok(Ok(Matched {
+                            Matched {
                                 tag,
                                 offset: read_at,
                                 value: Value::Slice(bytes)
-                            }));
+                            }
                         },
                         Ok(Cont::ReadValue(tag)) => {
                             let value = match &read.field.value {
@@ -188,22 +191,26 @@ impl<M: Matcher> MatcherFields<M> {
                                 x => unreachable!("unexpected {:?}", x),
                             };
 
-                            self.matcher.decide_after(self.offset as usize);
                             // println!("{:indent$}{:?}", "", value, indent = 8);
 
-                            return Ok(Ok(Matched {
+                            Matched {
                                 tag,
                                 offset: read_at,
                                 value
-                            }));
+                            }
                         },
                         Err(Skip) => {
                             let skipped = read.field_len();
                             *buf = &buf[..skipped];
-
+                            continue;
                             //println!("{:indent$}skipped {}", "", skipped, indent = 8);
                         }
-                    }
+                    };
+
+                    self.matcher.decide_after(self.offset as usize);
+
+                    return Ok(Ok(ret));
+
                     // how to know we are now dropping multiple levels?
                 },
             }
@@ -220,7 +227,7 @@ struct Matched<'a, T> {
 
 #[derive(Debug)]
 enum Cont<T> {
-    Message,
+    Message(Option<T>),
     ReadStr(T),
     ReadVec(T),
     ReadValue(T),
@@ -228,6 +235,7 @@ enum Cont<T> {
 
 #[derive(Debug)]
 enum Value<'a> {
+    Marker,
     Varint(u64),
     Fixed64(u64),
     Fixed32(u32),
