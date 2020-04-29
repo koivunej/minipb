@@ -86,14 +86,44 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
-    let mut state = State::Top;
-
     let mut fm = MatcherFields::new(State::Top);
 
+    /*
     loop {
         match fm.next(&mut buf)? {
             Ok(matched) => println!("{:?}", matched),
             Err(x) => panic!("{:?}", x),
+        }
+    }*/
+
+    let mut copies = Vec::new();
+    let mut offset = 0;
+    copies.push(buffer[offset]);
+    offset += 1;
+
+    loop {
+        let orig_len = copies.len();
+        let mut buf = &copies[..];
+        match fm.next(&mut buf)? {
+            Ok(matched) => {
+                println!("{:?}", matched);
+                let consumed = orig_len - buf.len();
+                copies.drain(..consumed);
+            },
+            Err(Status::IdleAtEndOfBuffer) => {
+                if offset != buffer.len() {
+                    copies.push(buffer[offset]);
+                    offset += 1;
+                } else {
+                    break;
+                }
+            },
+            Err(Status::NeedMoreBytes) => {
+                let consumed = orig_len - buf.len();
+                copies.drain(..consumed);
+                copies.push(buffer[offset]);
+                offset += 1;
+            },
         }
     }
 
@@ -128,6 +158,10 @@ impl<M: Matcher> MatcherFields<M> {
             matcher,
             state: State::Ready,
         }
+    }
+
+    fn offset(&self) -> u64 {
+        self.offset
     }
 
     fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
@@ -196,10 +230,8 @@ impl<M: Matcher> MatcherFields<M> {
                 },
                 State::Ready => {
                     match self.reader.next(buf)? {
-                        Err(Status::IdleAtEndOfBuffer) => unreachable!(),
-                        Err(Status::NeedMoreBytes) => unreachable!(),
+                        Err(s) => return Ok(Err(s)),
                         Ok(read) => {
-
                             let consumed = read.consumed();
                             let decoded = &buf[..consumed];
                             *buf = &buf[consumed..];
@@ -423,6 +455,10 @@ impl FieldReader {
             }
         }
 
+        if data.is_empty() {
+            return Ok(Err(Status::IdleAtEndOfBuffer));
+        }
+
         let (consumed, tag) = launder!(read_varint32(data)?);
 
         let data = &data[consumed..];
@@ -450,7 +486,6 @@ impl FieldReader {
         };
 
         let consumed = consumed + additional;
-        let data = &data[consumed..];
 
         self.field = Some(FieldInfo {
             id: field,
