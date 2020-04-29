@@ -117,7 +117,7 @@ enum State<T> {
     Ready,
     DecidingAfter,
     Gathering(T, u64, u64),
-    //Skipping(u64),
+    Skipping(u64),
 }
 
 impl<M: Matcher> MatcherFields<M> {
@@ -177,7 +177,23 @@ impl<M: Matcher> MatcherFields<M> {
                     self.state = State::DecidingAfter;
 
                     return Ok(Ok(ret));
-                }
+                },
+                State::Skipping(amount) => {
+
+                    let amount = *amount;
+
+                    if buf.len() as u64 >= amount {
+                        *buf = &buf[amount as usize..];
+                        self.offset += amount as u64;
+                        self.state = State::Ready;
+                    } else {
+                        let available = buf.len();
+                        *buf = &buf[buf.len()..];
+                        self.offset += available as u64;
+                        self.state = State::Skipping(amount - available as u64);
+                        return Ok(Err(Status::NeedMoreBytes));
+                    }
+                },
                 State::Ready => {
                     match self.reader.next(buf)? {
                         Err(Status::IdleAtEndOfBuffer) => unreachable!(),
@@ -236,8 +252,17 @@ impl<M: Matcher> MatcherFields<M> {
                                     }
                                 },
                                 Err(Skip) => {
-                                    let skipped = read.field_len();
+                                    let total = read.field_len();
+                                    let skipped = read.field_len().min(buf.len());
+
                                     *buf = &buf[..skipped];
+                                    self.offset += skipped as u64;
+
+                                    if skipped < total {
+                                        self.state = State::Skipping((total - skipped) as u64);
+                                        return Ok(Err(Status::NeedMoreBytes));
+                                    }
+
                                     continue;
                                 }
                             };
