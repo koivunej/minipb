@@ -31,7 +31,10 @@ pub fn read_fixed64(data: &[u8]) -> Result<(usize, u64), NeedMoreBytes> {
     }
 }
 
-pub fn read_varint(data: &[u8], max_bytes: usize) -> Result<Result<(usize, u64), NeedMoreBytes>, DecodingError> {
+pub fn read_varint(
+    data: &[u8],
+    max_bytes: usize,
+) -> Result<Result<(usize, u64), NeedMoreBytes>, DecodingError> {
     let mask = 0x7f;
 
     let mut val = 0u64;
@@ -55,4 +58,3 @@ pub fn read_varint(data: &[u8], max_bytes: usize) -> Result<Result<(usize, u64),
         Err(DecodingError::TooManyVarint64Bytes)
     }
 }
-

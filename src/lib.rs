@@ -10,7 +10,7 @@ pub struct ReadField<'a> {
     /// How many bytes were consumed from the beginning of the buffer
     consumed: usize,
     /// The actual read field, which can be used to skip the field.
-    field: &'a FieldInfo
+    field: &'a FieldInfo,
 }
 
 impl ReadField<'_> {
@@ -74,7 +74,6 @@ impl TryFrom<u32> for WireType {
     }
 }
 
-
 impl FieldInfo {
     fn bytes_to_skip(&self) -> usize {
         match self.value {
@@ -109,9 +108,6 @@ pub enum Status {
     NeedMoreBytes,
 }
 
-
-
-
 /// Represents either a bug in this crate, or an error in the protobuf bytes.
 #[derive(Debug)]
 pub enum DecodingError {
@@ -119,7 +115,7 @@ pub enum DecodingError {
     UnknownWireType(u32),
     TooManyVarint32Bytes,
     TooManyVarint64Bytes,
-    InvalidUtf8
+    InvalidUtf8,
 }
 
 impl fmt::Display for DecodingError {
@@ -127,7 +123,12 @@ impl fmt::Display for DecodingError {
         use DecodingError::*;
         match *self {
             UnsupportedGroupWireType(tag) => write!(fmt, "groups are not supported: {:02x}", tag),
-            UnknownWireType(tag) => write!(fmt, "unsupported wire type in {:02x} of tag {:02x}", tag & 0x7, tag),
+            UnknownWireType(tag) => write!(
+                fmt,
+                "unsupported wire type in {:02x} of tag {:02x}",
+                tag & 0x7,
+                tag
+            ),
             TooManyVarint32Bytes => write!(fmt, "too many bytes read for 32-bit varint"),
             TooManyVarint64Bytes => write!(fmt, "too many bytes read for 64-bit varint"),
             InvalidUtf8 => write!(fmt, "Invalid UTF8"),

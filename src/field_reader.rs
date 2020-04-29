@@ -1,6 +1,8 @@
 use std::convert::TryFrom;
 
-use crate::{ReadField, FieldInfo, Status, DecodingError, FieldValue, WireType, NeedMoreBytes, pb::*};
+use crate::{
+    pb::*, DecodingError, FieldInfo, FieldValue, NeedMoreBytes, ReadField, Status, WireType,
+};
 
 #[derive(Default)]
 pub struct FieldReader {
@@ -10,14 +12,17 @@ pub struct FieldReader {
 impl FieldReader {
     /// Reads the first bytes as any field. After returning a length delimited field, the data must
     /// be skipped for 'ReadField::bytes_to_skip` to avoid interpreting the field as a nested message.
-    pub fn next<'a>(&'a mut self, data: &[u8]) -> Result<Result<ReadField<'a>, Status>, DecodingError> {
+    pub fn next<'a>(
+        &'a mut self,
+        data: &[u8],
+    ) -> Result<Result<ReadField<'a>, Status>, DecodingError> {
         macro_rules! launder {
             ($x:expr) => {
                 match $x {
                     Ok(x) => x,
                     Err(NeedMoreBytes) => return Ok(Err(Status::NeedMoreBytes)),
                 }
-            }
+            };
         }
 
         if data.is_empty() {
@@ -35,15 +40,15 @@ impl FieldReader {
             WireType::Varint => {
                 let (consumed, val) = launder!(read_varint64(data)?);
                 (consumed, FieldValue::Varint(val))
-            },
+            }
             WireType::Fixed32 => {
                 let (consumed, val) = launder!(read_fixed32(data));
                 (consumed, FieldValue::Fixed32(val))
-            },
+            }
             WireType::Fixed64 => {
                 let (consumed, val) = launder!(read_fixed64(data));
                 (consumed, FieldValue::Fixed64(val))
-            },
+            }
             WireType::LengthDelimited => {
                 let (consumed, len) = launder!(read_varint32(data)?);
                 (consumed, FieldValue::DataLength(len))
@@ -55,14 +60,11 @@ impl FieldReader {
         self.field = Some(FieldInfo {
             id: field,
             kind,
-            value
+            value,
         });
 
         let field = self.field.as_ref().unwrap();
 
-        Ok(Ok(ReadField {
-            consumed,
-            field
-        }))
+        Ok(Ok(ReadField { consumed, field }))
     }
 }

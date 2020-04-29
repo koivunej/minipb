@@ -1,10 +1,10 @@
 #![warn(rust_2018_idioms)]
 
-use std::io::Read;
 use std::fmt;
+use std::io::Read;
 
-use minipb::{Status, ReadField};
-use minipb::matcher_fields::{Matcher, Cont, Skip, MatcherFields};
+use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip};
+use minipb::{ReadField, Status};
 
 struct HexOnly<'a>(&'a [u8]);
 
@@ -47,16 +47,27 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     impl Matcher for State {
         type Tag = InterestingField;
 
-        fn decide_before(&mut self, offset: usize, read: &ReadField<'_>) -> Result<Cont<Self::Tag>, Skip> {
+        fn decide_before(
+            &mut self,
+            offset: usize,
+            read: &ReadField<'_>,
+        ) -> Result<Cont<Self::Tag>, Skip> {
             //println!("decide({:?}, {}, {:?})", self, offset, read);
             match self {
                 State::Top if read.field_id() == 2 => {
-                    *self = State::Link { until: offset + read.bytes_to_skip() };
-                    return Ok(Cont::Message(Some(InterestingField::StartPbLink)))
-                },
-                State::Top => {},
+                    *self = State::Link {
+                        until: offset + read.bytes_to_skip(),
+                    };
+                    return Ok(Cont::Message(Some(InterestingField::StartPbLink)));
+                }
+                State::Top => {}
                 State::Link { until } => {
-                    assert!(offset < *until, "got up to {} but should had stopped at {}", until, offset);
+                    assert!(
+                        offset < *until,
+                        "got up to {} but should had stopped at {}",
+                        until,
+                        offset
+                    );
 
                     return match read.field_id() {
                         1 => Ok(Cont::ReadSlice(InterestingField::PbLinkHash)),
@@ -64,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                         3 => Ok(Cont::ReadValue(InterestingField::PbLinkTotalSize)),
                         _ => Err(Skip),
                     };
-                },
+                }
             }
 
             Err(Skip)
@@ -76,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                 State::Link { until } if offset == *until => {
                     *self = State::Top;
                     (false, Some(InterestingField::EndPbLink))
-                },
+                }
                 _ => (false, None),
             }
         }
@@ -105,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                 println!("{:?}", matched);
                 let consumed = orig_len - buf.len();
                 copies.drain(..consumed);
-            },
+            }
             Err(Status::IdleAtEndOfBuffer) => {
                 if offset != buffer.len() {
                     copies.push(buffer[offset]);
@@ -113,13 +124,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                 } else {
                     break;
                 }
-            },
+            }
             Err(Status::NeedMoreBytes) => {
                 let consumed = orig_len - buf.len();
                 copies.drain(..consumed);
                 copies.push(buffer[offset]);
                 offset += 1;
-            },
+            }
         }
     }
 
@@ -129,4 +140,3 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     Ok(())
 }
-

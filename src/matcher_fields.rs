@@ -1,5 +1,5 @@
-use crate::{ReadField, Status, DecodingError, FieldValue};
 use crate::field_reader::FieldReader;
+use crate::{DecodingError, FieldValue, ReadField, Status};
 
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
@@ -10,7 +10,11 @@ pub trait Matcher {
     ///
     /// Returns the direction to take with the field with either Cont or Skip. Cont'd fields need
     /// to be tagged.
-    fn decide_before(&mut self, offset: usize, read: &ReadField<'_>) -> Result<Cont<Self::Tag>, Skip>;
+    fn decide_before(
+        &mut self,
+        offset: usize,
+        read: &ReadField<'_>,
+    ) -> Result<Cont<Self::Tag>, Skip>;
 
     /// Advance the matcher after a field has been processed. Depending on the return value this
     /// can be called many times in order for the Matcher ot highligh which objects have ended at
@@ -57,7 +61,10 @@ impl<M: Matcher> MatcherFields<M> {
         }
     }
 
-    pub fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
+    pub fn next<'a>(
+        &mut self,
+        buf: &mut &'a [u8],
+    ) -> Result<Result<Matched<'a, M::Tag>, Status>, DecodingError> {
         loop {
             match &self.state {
                 State::DecidingAfter => {
@@ -76,7 +83,7 @@ impl<M: Matcher> MatcherFields<M> {
                     } else {
                         continue;
                     }
-                },
+                }
                 State::Gathering(_, _, amount) => {
                     if (buf.len() as u64) < *amount {
                         return Ok(Err(Status::NeedMoreBytes));
@@ -90,10 +97,11 @@ impl<M: Matcher> MatcherFields<M> {
                     assert_eq!(bytes.len() as u64, amount);
 
                     // this trick is needed to avoid Matcher::Tag: Copy
-                    let (tag, read_at) = match std::mem::replace(&mut self.state, State::DecidingAfter) {
-                        State::Gathering(tag, read_at, _) => (tag, read_at),
-                        _ => unreachable!(),
-                    };
+                    let (tag, read_at) =
+                        match std::mem::replace(&mut self.state, State::DecidingAfter) {
+                            State::Gathering(tag, read_at, _) => (tag, read_at),
+                            _ => unreachable!(),
+                        };
 
                     let ret = Matched {
                         tag,
@@ -104,9 +112,8 @@ impl<M: Matcher> MatcherFields<M> {
                     self.state = State::DecidingAfter;
 
                     return Ok(Ok(ret));
-                },
+                }
                 State::Skipping(amount) => {
-
                     let amount = *amount;
 
                     if buf.len() as u64 >= amount {
@@ -120,84 +127,83 @@ impl<M: Matcher> MatcherFields<M> {
                         self.state = State::Skipping(amount - available as u64);
                         return Ok(Err(Status::NeedMoreBytes));
                     }
-                },
-                State::Ready => {
-                    match self.reader.next(buf)? {
-                        Err(s) => return Ok(Err(s)),
-                        Ok(read) => {
-                            let consumed = read.consumed();
-                            let _decoded = &buf[..consumed];
-                            *buf = &buf[consumed..];
-                            let read_at = self.offset;
-                            self.offset += consumed as u64;
+                }
+                State::Ready => match self.reader.next(buf)? {
+                    Err(s) => return Ok(Err(s)),
+                    Ok(read) => {
+                        let consumed = read.consumed();
+                        let _decoded = &buf[..consumed];
+                        *buf = &buf[consumed..];
+                        let read_at = self.offset;
+                        self.offset += consumed as u64;
 
-                            let decision = self.matcher.decide_before(read_at as usize, &read);
+                        let decision = self.matcher.decide_before(read_at as usize, &read);
 
-                            let ret = match decision {
-                                Ok(Cont::Message(maybe_tag)) => {
-                                    if let Some(tag) = maybe_tag {
-                                        Matched {
-                                            tag,
-                                            offset: read_at,
-                                            value: Value::Marker,
-                                        }
-                                    } else {
-                                        continue;
+                        let ret = match decision {
+                            Ok(Cont::Message(maybe_tag)) => {
+                                if let Some(tag) = maybe_tag {
+                                    Matched {
+                                        tag,
+                                        offset: read_at,
+                                        value: Value::Marker,
                                     }
-                                },
-                                Ok(Cont::ReadSlice(tag)) => {
-                                    if buf.len() >= read.field_len() {
-                                        let bytes = &buf[..read.field_len()];
-                                        *buf = &buf[bytes.len()..];
-                                        self.offset += bytes.len() as u64;
-                                        assert_eq!(bytes.len(), read.field_len());
-
-                                        Matched {
-                                            tag,
-                                            offset: read_at,
-                                            value: Value::Slice(bytes),
-                                        }
-                                    } else {
-                                        self.state = State::Gathering(tag, read_at, read.field_len() as u64);
-                                        return Ok(Err(Status::NeedMoreBytes));
-                                    }
-                                },
-                                Ok(Cont::ReadValue(tag)) => {
-                                    let value = match &read.field.value {
-                                        FieldValue::Varint(x) => Value::Varint(*x),
-                                        FieldValue::Fixed64(x) => Value::Fixed64(*x),
-                                        FieldValue::Fixed32(x) => Value::Fixed32(*x),
-                                        x => unreachable!("unexpected {:?}", x),
-                                    };
+                                } else {
+                                    continue;
+                                }
+                            }
+                            Ok(Cont::ReadSlice(tag)) => {
+                                if buf.len() >= read.field_len() {
+                                    let bytes = &buf[..read.field_len()];
+                                    *buf = &buf[bytes.len()..];
+                                    self.offset += bytes.len() as u64;
+                                    assert_eq!(bytes.len(), read.field_len());
 
                                     Matched {
                                         tag,
                                         offset: read_at,
-                                        value
+                                        value: Value::Slice(bytes),
                                     }
-                                },
-                                Err(Skip) => {
-                                    let total = read.field_len();
-                                    let skipped = read.field_len().min(buf.len());
-
-                                    *buf = &buf[..skipped];
-                                    self.offset += skipped as u64;
-
-                                    if skipped < total {
-                                        self.state = State::Skipping((total - skipped) as u64);
-                                        return Ok(Err(Status::NeedMoreBytes));
-                                    }
-
-                                    continue;
+                                } else {
+                                    self.state =
+                                        State::Gathering(tag, read_at, read.field_len() as u64);
+                                    return Ok(Err(Status::NeedMoreBytes));
                                 }
-                            };
+                            }
+                            Ok(Cont::ReadValue(tag)) => {
+                                let value = match &read.field.value {
+                                    FieldValue::Varint(x) => Value::Varint(*x),
+                                    FieldValue::Fixed64(x) => Value::Fixed64(*x),
+                                    FieldValue::Fixed32(x) => Value::Fixed32(*x),
+                                    x => unreachable!("unexpected {:?}", x),
+                                };
 
-                            self.state = State::DecidingAfter;
+                                Matched {
+                                    tag,
+                                    offset: read_at,
+                                    value,
+                                }
+                            }
+                            Err(Skip) => {
+                                let total = read.field_len();
+                                let skipped = read.field_len().min(buf.len());
 
-                            return Ok(Ok(ret));
-                        },
+                                *buf = &buf[..skipped];
+                                self.offset += skipped as u64;
+
+                                if skipped < total {
+                                    self.state = State::Skipping((total - skipped) as u64);
+                                    return Ok(Err(Status::NeedMoreBytes));
+                                }
+
+                                continue;
+                            }
+                        };
+
+                        self.state = State::DecidingAfter;
+
+                        return Ok(Ok(ret));
                     }
-                }
+                },
             }
         }
     }
