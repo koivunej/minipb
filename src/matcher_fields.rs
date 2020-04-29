@@ -1,5 +1,6 @@
 use crate::field_reader::FieldReader;
 use crate::{DecodingError, FieldValue, ReadField, Status};
+use std::borrow::Cow;
 
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
@@ -106,7 +107,7 @@ impl<M: Matcher> MatcherFields<M> {
                     let ret = Matched {
                         tag,
                         offset: read_at,
-                        value: Value::Slice(bytes),
+                        value: Value::Slice(Cow::Borrowed(bytes)),
                     };
 
                     self.state = State::DecidingAfter;
@@ -161,7 +162,7 @@ impl<M: Matcher> MatcherFields<M> {
                                     Matched {
                                         tag,
                                         offset: read_at,
-                                        value: Value::Slice(bytes),
+                                        value: Value::Slice(Cow::Borrowed(bytes)),
                                     }
                                 } else {
                                     self.state =
@@ -253,7 +254,7 @@ pub enum Value<'a> {
     /// Value read as a [`WireType::Fixed32`]
     Fixed32(u32),
     /// A length delimited field read as slice.
-    Slice(&'a [u8]),
+    Slice(Cow<'a, [u8]>),
 }
 
 /// Represents an instruction to skip the current field. Good default.
