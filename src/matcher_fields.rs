@@ -1,11 +1,12 @@
 use crate::field_reader::FieldReader;
 use crate::{DecodingError, FieldValue, ReadField, Status};
 use std::ops::Range;
+use std::fmt;
 
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
     /// Tag describing to caller how to process the field
-    type Tag;
+    type Tag: fmt::Debug;
 
     /// Advance the matcher on a new field read.
     ///
@@ -34,6 +35,7 @@ pub struct MatcherFields<M: Matcher> {
     state: State<M::Tag>,
 }
 
+#[derive(Debug)]
 enum State<T> {
     Ready,
     DecidingAfter,
@@ -67,6 +69,7 @@ impl<M: Matcher> MatcherFields<M> {
         buf: &mut &'a [u8],
     ) -> Result<Result<Matched<M::Tag>, Status>, DecodingError> {
         loop {
+            //println!("{:<4} {:<4} {:?}", self.offset, buf.len(), self.state);
             match &mut self.state {
                 State::DecidingAfter => {
                     let (again, maybe_tag) = self.matcher.decide_after(self.offset as usize);
@@ -112,6 +115,7 @@ impl<M: Matcher> MatcherFields<M> {
                     };
 
                     self.state = State::DecidingAfter;
+                    //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
 
                     return Ok(Ok(ret));
                 }
@@ -131,11 +135,13 @@ impl<M: Matcher> MatcherFields<M> {
                                 State::Skipping(tag, read_at, start, _) => (tag, read_at, start),
                                 _ => unreachable!(),
                             };
-                        return Ok(Ok(Matched {
+                        let ret = Matched {
                             tag,
                             offset: read_at,
                             value: Value::Slice(start..self.offset),
-                        }));
+                        };
+                        //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
+                        return Ok(Ok(ret));
                     }
 
                     *amount = remaining;
@@ -151,9 +157,11 @@ impl<M: Matcher> MatcherFields<M> {
                         self.offset += consumed as u64;
 
                         let decision = self.matcher.decide_before(read_at as usize, &read);
+                        //println!("    => decision before {:?}", decision);
 
                         let ret = match decision {
                             Ok(Cont::Message(maybe_tag)) => {
+                                //println!("    => starting submessage with buf.len() = {}", buf.len());
                                 if let Some(tag) = maybe_tag {
                                     Matched {
                                         tag,
@@ -165,6 +173,7 @@ impl<M: Matcher> MatcherFields<M> {
                                 }
                             }
                             Ok(Cont::ReadSlice(tag)) => {
+                                //println!("    => starting to gather with buf.len() = {}", buf.len());
                                 self.state = State::Gathering(
                                     tag, read_at, self.offset, read.field_len() as u64);
                                 continue;
@@ -191,6 +200,8 @@ impl<M: Matcher> MatcherFields<M> {
                         };
 
                         self.state = State::DecidingAfter;
+
+                        //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
 
                         return Ok(Ok(ret));
                     }
