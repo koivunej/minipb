@@ -5,7 +5,7 @@ use std::io::Read;
 use std::borrow::Cow;
 use std::ops::Range;
 
-use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip, Matched, Value};
+use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip, Matched, Value, Gatherer, Slicer, Gathered};
 use minipb::{ReadField, Status, DecodingError, FieldId, Reader};
 
 struct HexOnly<'a>(&'a [u8]);
@@ -115,6 +115,73 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
+    #[derive(Default)]
+    struct PBLinkGatherer {
+        hash: Option<Range<u64>>,
+        name: Option<Range<u64>>,
+        total_size: Option<u64>,
+    }
+
+    impl<'a> Gatherer<'a> for PBLinkGatherer {
+        type Tag = DagPbElement;
+        type Returned = PBLink<'a>;
+
+        fn update(&mut self, matched: Matched<DagPbElement>, slicer: Slicer<'a>) -> Result<Option<Self::Returned>, DecodingError> {
+            use DagPbElement::*;
+
+            let (field, value) = match dbg!(matched) {
+                Matched { tag: EndPbLink, .. } => {
+                    if let (Some(_), Some(_), Some(_)) = (self.hash.as_ref(), self.name.as_ref(), self.total_size) {
+                        let hr = self.hash.take().unwrap();
+                        let nr = self.name.take().unwrap();
+                        let total_size = self.total_size.take().unwrap();
+
+                        let hash = Cow::Borrowed(slicer.as_slice(&hr));
+                        let name = slicer.as_slice(&nr);
+                        let name = Cow::Borrowed(std::str::from_utf8(name).unwrap());
+
+                        return Ok(Some(dbg!(PBLink {
+                            hash,
+                            name,
+                            total_size,
+                        })));
+                    } else {
+                        println!("could not build a pblink: {:?}, {:?}, {:?}", self.hash, self.name, self.total_size);
+                    }
+
+                    return Ok(None)
+                },
+                Matched { tag: PbLinkHash, value, .. } => (&mut self.hash, value),
+                Matched { tag: PbLinkName, value, .. } => (&mut self.name, value),
+                Matched { tag: PbLinkTotalSize, value, .. } => {
+                    self.total_size = match value {
+                        Value::Varint(x) => Some(x),
+                        _ => None
+                    };
+                    return Ok(None)
+                },
+                Matched { .. } => return Ok(None)
+            };
+
+            *field = match value {
+                Value::Slice(range) => Some(range),
+                _ => None,
+            };
+
+            return Ok(None)
+        }
+
+        fn min_offset(&self) -> Option<u64> {
+            let h = self.hash.as_ref().map(|r| r.start);
+            let n = self.name.as_ref().map(|r| r.start);
+            match (h, n) {
+                (Some(h), Some(n)) => Some(h.min(n)),
+                (Some(x), _) | (_, Some(x)) => Some(x),
+                _ => None
+            }
+        }
+    }
+
     struct Links {
         reader: MatcherFields<Document>,
         lengths: [Option<Range<u64>>; 2],
@@ -133,9 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             let orig_len = buf.len();
             let used_len = tmp.len();
 
-            let min = self.lengths.iter()
-                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
-                .min();
+            let min = self.min_offset();
 
             if let Some(min) = min {
                 //*buf = &buf[(self.reader.offset() - min) as usize..];
@@ -175,6 +240,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             }
         }
 
+        fn min_offset(&self) -> Option<u64> {
+            self.lengths.iter()
+                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
+                .min()
+        }
 
         fn inner_next<'a>(
             &mut self,
@@ -185,32 +255,22 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
             let orig: &'a [u8] = *buf;
 
-            let start = self.reader.offset();
-
-            // before returning this function must save the length of buf to know how long the
-            // inner reader has gone.
-            //
-            // when entering the next time, the tmp received by the self.reader must be have some
-            // amount of bytes skipped from the front
-
-            let min = self.lengths.iter()
-                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
-                .min();
-
-            if let Some(min) = min {
-                // FIXME: this doesn't work because min goes to zero quite fast but that is the
-                // *buffer* location, instead of file location. we'd somehow need to have ...
-                *buf = &buf[(start - min) as usize..];
-                //println!("inner_next: advancing buf by min={} (from {} to {})", min, orig.len(), buf.len());
+            if let Some(min) = self.min_offset() {
+                // we need to advance, as the reader thinks the buf it get's passed starts from
+                // where it last stopped at but we should had buffered (at caller) the amount
+                // needed by our saved elements.
+                *buf = &buf[(self.reader.offset() - min) as usize..];
             }
 
             loop {
                 let (index, value) = match self.reader.next(buf)? {
                     Ok(Matched { tag: StartPbLink, .. }) => continue,
                     Ok(Matched { tag: EndPbLink, .. }) => {
-                        let min = self.lengths.iter()
-                            .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
-                            .min();
+
+                        // FIXME: this is definetly needed but ... I wonder if the matches change
+                        // right before the end, will this be correct? Probably not
+
+                        let min = self.min_offset();
                         let lens = (self.lengths[0].take(), self.lengths[1].take(), self.total_size.take(), min);
 
                         if let (Some(mut xr), Some(mut yr), Some(total_size), Some(min)) = lens {
@@ -221,8 +281,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                             xr.end -= min;
                             yr.start -= min;
                             yr.end -= min;
-
-                            //println!("        => {:?}", (&xr, &yr, &total_size));
 
                             let hash = Cow::Borrowed(&orig[xr.start as usize..xr.end as usize]);
                             let name = &orig[yr.start as usize..yr.end as usize];
@@ -237,8 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                                 total_size,
                             }));
                         } else {
-                            panic!("read partial pblink:\n\
-                                lens:  {:?}\n", lens);
+                            panic!("read partial pblink:\nlens:  {:?}\n", lens);
                         }
                     }
                     Err(IdleAtEndOfBuffer) => return Ok(Err(IdleAtEndOfBuffer)),
@@ -262,7 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                 };
 
                 self.lengths[index] = Some(match value {
-                    Value::Slice(Range { start: s, end: e }) => (s)..(e),
+                    Value::Slice(range) => range,
                     _ => unreachable!()
                 });
             }
@@ -270,6 +327,46 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
+    let mut g = Gathered::new(Document::Top, PBLinkGatherer::default());
+
+    let mut copies = Vec::new();
+    let mut offset = 0;
+    copies.push(buffer[offset]);
+    offset += 1;
+
+    loop {
+        let orig_len = copies.len();
+        let mut buf = &copies[..];
+        //println!("trying buf={:?}", HexOnly(buf));
+        match g.next(&mut buf)? {
+            Ok(matched) => {
+                println!("{:?}", matched);
+                let consumed = orig_len - buf.len();
+                copies.drain(..consumed);
+            }
+            Err(Status::IdleAtEndOfBuffer) => {
+                if offset != buffer.len() {
+                    let consumed = orig_len - buf.len();
+                    copies.drain(..consumed);
+                    //println!("Err(IdleAtEndOfBuffer) pushing to copies.len()={} from {}", copies.len(), offset);
+                    copies.push(buffer[offset]);
+                    offset += 1;
+                } else {
+                    break;
+                }
+            }
+            Err(Status::NeedMoreBytes) => {
+                let consumed = orig_len - buf.len();
+                let before = copies.len();
+                copies.drain(..consumed);
+                //println!("Err(NeedMoreBytes) drained from {}, now copies.len()={}, pushing from {}", before, copies.len(), offset);
+                copies.push(buffer[offset]);
+                offset += 1;
+            }
+        }
+    }
+
+    /*
     let mut links = Links::new();
     /*
     let mut buf = &buffer[..];
@@ -318,6 +415,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             }
         }
     }
+    */
 
     /*
     let mut fm = MatcherFields::new(Document::Top);
