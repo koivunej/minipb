@@ -5,8 +5,8 @@ use std::io::Read;
 use std::borrow::Cow;
 use std::ops::Range;
 
-use minipb::matcher_fields::{Cont, Matcher, MatcherFields, Skip, Matched, Value, Gatherer, Slicer, Gathered};
-use minipb::{ReadField, Status, DecodingError, FieldId, Reader};
+use minipb::matcher_fields::{Cont, Matcher, Skip, Matched, Value, Gatherer, Slicer, Gathered};
+use minipb::{ReadField, Status, DecodingError, FieldId};
 
 struct HexOnly<'a>(&'a [u8]);
 
@@ -32,9 +32,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     //let mut offset = 0;
 
     #[derive(Debug)]
-    enum Document {
+    enum MerkleDag {
         Top,
         Link { until: usize },
+        UserBytes { until: usize },
     }
 
     #[derive(Debug)]
@@ -45,54 +46,83 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         PbLinkName,
         PbLinkTotalSize,
         PbLinkExtraField(FieldId),
+        StartUserBytes,
+        //StartUnixFs,
+        UnixFsType,
+        UnixFsData,
+        UnixFsFileSize,
+        UnixFsBlockSize,
+        UnixFsField(FieldId),
+        //EndUnixFsData,
+        EndUserBytes,
         TopExtraField(FieldId),
     }
 
-    impl Matcher for Document {
+    impl Matcher for MerkleDag {
         type Tag = DagPbElement;
 
         fn decide_before(
             &mut self,
             offset: usize,
             read: &ReadField<'_>,
-        ) -> Result<Cont<Self::Tag>, Skip<Self::Tag>> {
-            use Document::*;
+        ) -> Result<Result<Cont<Self::Tag>, Skip<Self::Tag>>, DecodingError> {
+            use MerkleDag::*;
             //println!("decide({:?}, {}, {:?})", self, offset, read);
             match self {
-                Top if read.field_id() == 2 => {
-                    *self = Document::Link {
+                Top if read.field_id() == 1 => {
+                    *self = UserBytes {
                         until: offset + read.bytes_to_skip(),
                     };
-                    return Ok(Cont::Message(Some(DagPbElement::StartPbLink)));
-                }
+                    return Ok(Ok(Cont::Message(Some(DagPbElement::StartUserBytes))));
+                },
+                Top if read.field_id() == 2 => {
+                    *self = Link {
+                        until: offset + read.bytes_to_skip(),
+                    };
+                    return Ok(Ok(Cont::Message(Some(DagPbElement::StartPbLink))));
+                },
                 Top => {}
                 Link { until } => {
-                    assert!(
-                        offset < *until,
-                        "got up to {} but should had stopped at {}",
-                        offset,
-                        until,
-                    );
+                    if offset >= *until {
+                        return Err(DecodingError::FailedMatcherNesting(offset, *until));
+                    }
 
-                    return match read.field_id() {
+                    return Ok(match read.field_id() {
                         1 => Ok(Cont::ReadSlice(DagPbElement::PbLinkHash)),
                         2 => Ok(Cont::ReadSlice(DagPbElement::PbLinkName)),
                         3 => Ok(Cont::ReadValue(DagPbElement::PbLinkTotalSize)),
                         x => Err(Skip(DagPbElement::PbLinkExtraField(x))),
-                    };
+                    });
+                },
+                UserBytes { until } => {
+                    if offset >= *until {
+                        return Err(DecodingError::FailedMatcherNesting(offset, *until));
+                    }
+
+                    return Ok(match read.field_id() {
+                        1 => Ok(Cont::ReadValue(DagPbElement::UnixFsType)),
+                        2 => Ok(Cont::ReadSlice(DagPbElement::UnixFsData)),
+                        3 => Ok(Cont::ReadValue(DagPbElement::UnixFsFileSize)),
+                        4 => Ok(Cont::ReadValue(DagPbElement::UnixFsBlockSize)),
+                        x => Err(Skip(DagPbElement::UnixFsField(x))),
+                    });
                 }
             }
 
-            Err(Skip(DagPbElement::TopExtraField(read.field_id())))
+            Ok(Err(Skip(DagPbElement::TopExtraField(read.field_id()))))
         }
 
         fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>) {
-            use Document::*;
+            use MerkleDag::*;
             // println!("decide_at({:?}, {})", self, offset);
             match self {
                 Link { until } if offset == *until => {
                     *self = Top;
                     (false, Some(DagPbElement::EndPbLink))
+                }
+                UserBytes { until } if offset == *until => {
+                    *self = Top;
+                    (false, Some(DagPbElement::EndUserBytes))
                 }
                 _ => (false, None),
             }
@@ -100,6 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     }
 
     struct PBLink<'a> {
+        /// File offset
+        offset: Range<u64>,
         hash: Cow<'a, [u8]>,
         name: Cow<'a, str>,
         total_size: u64,
@@ -108,6 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     impl fmt::Debug for PBLink<'_> {
         fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
             fmt.debug_struct("PBLink")
+                .field("offset", &format_args!("{:?}", self.offset))
                 .field("hash", &format_args!("{:?}", HexOnly(&*self.hash)))
                 .field("name", &self.name)
                 .field("total_size", &self.total_size)
@@ -117,6 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     #[derive(Default)]
     struct PBLinkGatherer {
+        start: Option<u64>,
         hash: Option<Range<u64>>,
         name: Option<Range<u64>>,
         total_size: Option<u64>,
@@ -129,24 +163,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         fn update(&mut self, matched: Matched<DagPbElement>, slicer: Slicer<'a>) -> Result<Option<Self::Returned>, DecodingError> {
             use DagPbElement::*;
 
-            let (field, value) = match dbg!(matched) {
-                Matched { tag: EndPbLink, .. } => {
-                    if let (Some(_), Some(_), Some(_)) = (self.hash.as_ref(), self.name.as_ref(), self.total_size) {
-                        let hr = self.hash.take().unwrap();
-                        let nr = self.name.take().unwrap();
-                        let total_size = self.total_size.take().unwrap();
+            let (field, value) = match matched {
+                Matched { tag: EndPbLink, offset, .. } => {
+
+                    // important that we don't keep these between links
+                    let values = (self.start.take(), self.hash.take(), self.name.take(), self.total_size.take());
+
+                    if let (Some(start), Some(hr), Some(nr), Some(total_size)) = values {
 
                         let hash = Cow::Borrowed(slicer.as_slice(&hr));
                         let name = slicer.as_slice(&nr);
                         let name = Cow::Borrowed(std::str::from_utf8(name).unwrap());
 
-                        return Ok(Some(dbg!(PBLink {
+                        return Ok(Some(PBLink {
+                            offset: start..offset,
                             hash,
                             name,
                             total_size,
-                        })));
-                    } else {
-                        println!("could not build a pblink: {:?}, {:?}, {:?}", self.hash, self.name, self.total_size);
+                        }));
                     }
 
                     return Ok(None)
@@ -160,7 +194,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
                     };
                     return Ok(None)
                 },
-                Matched { .. } => return Ok(None)
+                Matched { tag: StartPbLink, offset, .. } => {
+                    self.start = Some(offset);
+                    return Ok(None)
+                },
+                Matched { tag, offset, value } => {
+                    println!("skipped {:?} {:?} at {}", tag, value, offset);
+                    return Ok(None)
+                }
             };
 
             *field = match value {
@@ -182,152 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
-    struct Links {
-        reader: MatcherFields<Document>,
-        lengths: [Option<Range<u64>>; 2],
-        total_size: Option<u64>,
-    }
-
-    impl<'a> Reader<'a, PBLink<'a>> for Links {
-        fn next(
-            &mut self,
-            buf: &mut &'a [u8],
-        ) -> Result<Result<PBLink<'a>, Status>, DecodingError> {
-            let mut tmp = *buf;
-            let ret = self.inner_next(&mut tmp);
-            // if buf was changed here, it would need to modify all of the ranges as well
-
-            let orig_len = buf.len();
-            let used_len = tmp.len();
-
-            let min = self.min_offset();
-
-            if let Some(min) = min {
-                //*buf = &buf[(self.reader.offset() - min) as usize..];
-                //println!("found min={}, ignoring tmp.len()={} but setting buf to {} from {}", min, tmp.len(), buf.len(), orig_len);
-                /*for range in self.lengths.iter_mut() {
-                    match range {
-                        Some(Range { ref mut start, ref mut end }) => {
-                            *start -= min;
-                            *end -= min;
-                        },
-                        _ => {}
-                    }
-                }*/
-                if let Ok(Err(Status::NeedMoreBytes)) = &ret {
-                    //println!("buf.len() was {}, tmp.len() == {}, marked min={} as used as buf.len() == {}", orig_len, tmp.len(), min, buf.len());
-                }
-
-            } else {
-                *buf = tmp;
-
-                if let Ok(Err(Status::NeedMoreBytes)) = &ret {
-                    //println!("buf.len() was {}, tmp.len() == {}, now buf.len() == {}", orig_len, tmp.len(), buf.len());
-                }
-            }
-
-            ret
-        }
-    }
-
-    impl Links {
-
-        fn new() -> Self {
-            Links {
-                reader: MatcherFields::new(Document::Top),
-                lengths: [None, None],
-                total_size: None,
-            }
-        }
-
-        fn min_offset(&self) -> Option<u64> {
-            self.lengths.iter()
-                .filter_map(|opt| if let Some(Range { start, .. }) = opt.as_ref() { Some(*start) } else { None })
-                .min()
-        }
-
-        fn inner_next<'a>(
-            &mut self,
-            buf: &mut &'a [u8],
-        ) -> Result<Result<PBLink<'a>, Status>, DecodingError> {
-            use DagPbElement::*;
-            use Status::*;
-
-            let orig: &'a [u8] = *buf;
-
-            if let Some(min) = self.min_offset() {
-                // we need to advance, as the reader thinks the buf it get's passed starts from
-                // where it last stopped at but we should had buffered (at caller) the amount
-                // needed by our saved elements.
-                *buf = &buf[(self.reader.offset() - min) as usize..];
-            }
-
-            loop {
-                let (index, value) = match self.reader.next(buf)? {
-                    Ok(Matched { tag: StartPbLink, .. }) => continue,
-                    Ok(Matched { tag: EndPbLink, .. }) => {
-
-                        // FIXME: this is definetly needed but ... I wonder if the matches change
-                        // right before the end, will this be correct? Probably not
-
-                        let min = self.min_offset();
-                        let lens = (self.lengths[0].take(), self.lengths[1].take(), self.total_size.take(), min);
-
-                        if let (Some(mut xr), Some(mut yr), Some(total_size), Some(min)) = lens {
-                            // the issue here is that the indices are correct only on the first
-                            // PBLink we return
-
-                            xr.start -= min;
-                            xr.end -= min;
-                            yr.start -= min;
-                            yr.end -= min;
-
-                            let hash = Cow::Borrowed(&orig[xr.start as usize..xr.end as usize]);
-                            let name = &orig[yr.start as usize..yr.end as usize];
-
-                            let name = std::str::from_utf8(name)
-                                .unwrap_or_else(|e| panic!("failed to convert {:?} to str: {}", HexOnly(name), e));
-
-                            let name = Cow::Borrowed(name);
-                            return Ok(Ok(PBLink {
-                                hash,
-                                name,
-                                total_size,
-                            }));
-                        } else {
-                            panic!("read partial pblink:\nlens:  {:?}\n", lens);
-                        }
-                    }
-                    Err(IdleAtEndOfBuffer) => return Ok(Err(IdleAtEndOfBuffer)),
-                    Err(NeedMoreBytes) => return Ok(Err(NeedMoreBytes)),
-                    Ok(Matched { tag: PbLinkHash, value, .. }) => {
-                        (0, value)
-                    }
-                    Ok(Matched { tag: PbLinkName, value, .. }) => {
-                        (1, value)
-                    }
-                    Ok(Matched { tag: PbLinkTotalSize, value, .. }) => {
-                        if let Value::Varint(value) = value {
-                            self.total_size = Some(value);
-                        }
-                        continue;
-                    }
-                    Ok(ignored) => {
-                        println!("ignored {:?}", ignored);
-                        continue;
-                    }
-                };
-
-                self.lengths[index] = Some(match value {
-                    Value::Slice(range) => range,
-                    _ => unreachable!()
-                });
-            }
-
-        }
-    }
-
-    let mut g = Gathered::new(Document::Top, PBLinkGatherer::default());
+    let mut g = Gathered::new(MerkleDag::Top, PBLinkGatherer::default());
 
     let mut copies = Vec::new();
     let mut offset = 0;
@@ -357,7 +253,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             }
             Err(Status::NeedMoreBytes) => {
                 let consumed = orig_len - buf.len();
-                let before = copies.len();
                 copies.drain(..consumed);
                 //println!("Err(NeedMoreBytes) drained from {}, now copies.len()={}, pushing from {}", before, copies.len(), offset);
                 copies.push(buffer[offset]);
@@ -418,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     */
 
     /*
-    let mut fm = MatcherFields::new(Document::Top);
+    let mut fm = MatcherFields::new(MerkleDag::Top);
 
     /*
     loop {

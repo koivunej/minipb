@@ -116,6 +116,7 @@ pub enum DecodingError {
     TooManyVarint32Bytes,
     TooManyVarint64Bytes,
     InvalidUtf8,
+    FailedMatcherNesting(usize, usize),
 }
 
 impl fmt::Display for DecodingError {
@@ -132,6 +133,7 @@ impl fmt::Display for DecodingError {
             TooManyVarint32Bytes => write!(fmt, "too many bytes read for 32-bit varint"),
             TooManyVarint64Bytes => write!(fmt, "too many bytes read for 64-bit varint"),
             InvalidUtf8 => write!(fmt, "Invalid UTF8"),
+            FailedMatcherNesting(offset, limit) => write!(fmt, "nested field was read until {}, should had ended at {}", offset, limit),
         }
     }
 }

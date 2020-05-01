@@ -16,7 +16,7 @@ pub trait Matcher {
         &mut self,
         offset: usize,
         read: &ReadField<'_>,
-    ) -> Result<Cont<Self::Tag>, Skip<Self::Tag>>;
+    ) -> Result<Result<Cont<Self::Tag>, Skip<Self::Tag>>, DecodingError>;
 
     /// Advance the matcher after a field has been processed. Depending on the return value this
     /// can be called many times in order for the Matcher ot highligh which objects have ended at
@@ -156,7 +156,7 @@ impl<M: Matcher> MatcherFields<M> {
                     let read_at = self.offset;
                     self.offset += consumed as u64;
 
-                    let decision = self.matcher.decide_before(read_at as usize, &read);
+                    let decision = self.matcher.decide_before(read_at as usize, &read)?;
                     //println!("    => decision before {:?}", decision);
 
                     let ret = match decision {
@@ -303,7 +303,6 @@ pub struct Slicer<'a> {
 
 impl<'a> Slicer<'a> {
     pub(crate) fn wrap(buffer: &'a [u8], last_offset: u64) -> Self {
-        println!("{:?} = {} - {}", last_offset.checked_sub(buffer.len() as u64), last_offset, buffer.len());
         let first_offset = last_offset - buffer.len() as u64;
         Self {
             buffer,
@@ -313,7 +312,6 @@ impl<'a> Slicer<'a> {
 
     pub fn as_slice(&self, range: &Range<u64>) -> &'a [u8] {
         let adjusted_range = (range.start - self.first_offset) as usize..(range.end - self.first_offset) as usize;
-        println!("slicing {:?} into {:?} from buf.len() == {}", range, adjusted_range, self.buffer.len());
         &self.buffer[adjusted_range]
     }
 }
@@ -340,13 +338,10 @@ impl<'a, M: Matcher, G> Gathered<M, G>
     }
 
     pub fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<G::Returned, Status>, DecodingError> {
-        println!("buf.len() == {}", buf.len());
-
         let mut tmp = if let Some(min) = self.cached_min_offset {
             // this means that min is stored at buf[0] and buf[diff] is the next byte the inner
             // reader(s) need to look at
             let diff = (self.reader.offset() - min) as usize;
-            println!("attemping to slice buf.len() = {} at {}..", buf.len(), diff);
             &buf[diff..]
         } else {
             &buf[..]
@@ -371,10 +366,10 @@ impl<'a, M: Matcher, G> Gathered<M, G>
                 }
 
                 if self.cached_min_offset.is_none() {
-                    println!("cached min is none, *buf = {} from {}, ret = {:?}", tmp.len(), buf.len(), ret);
+                    //println!("cached min is none, *buf = {} from {}, ret = {:?}", tmp.len(), buf.len(), ret);
                     *buf = tmp;
                 } else {
-                    println!("buffering: {}", buf.len());
+                    //println!("buffering: {}", buf.len());
                 }
 
                 // FIXME: adjust the buf to contain needed again
