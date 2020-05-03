@@ -227,8 +227,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 
     let mut copies = Vec::new();
     let mut offset = 0;
-    copies.push(buffer[offset]);
-    offset += 1;
+    copies.extend(&buffer[..64]);
+    offset += 64;
 
     loop {
         let orig_len = copies.len();
