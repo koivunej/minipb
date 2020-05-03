@@ -3,7 +3,8 @@
 use std::convert::TryFrom;
 use std::fmt;
 use minipb::{ReadField, DecodingError, WireType, FieldId, Status};
-use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, Matched, Value, Slicer};
+use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, Matched, Value};
+use minipb::gather_fields::Slicer;
 
 /// Takes an argument like `/a/b/c::type` to navigate a (an unsigned integer) as submessage, to
 /// navigate b as a submessage, pick field c, then convert to it to `type` or error. Return all
@@ -69,7 +70,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for _ in buffer.len()..buffer.capacity() {
                 buffer.push(0);
             }
-            // eprintln!("trying to read {}", buffer[kept..].len());
             match stdin.read(&mut buffer[kept..])? {
                 0 => {
                     // hit eof
@@ -126,14 +126,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // FIXME: this should just move the window over the buffer, not drain
         buffer.drain(..consumed);
         need_to_keep_buffer = buffer.len();
-
-        /*
-        print!("trimmed to: {:indent$}", "", indent = consumed * 2);
-        for x in &buffer {
-            print!("{:02x}", x);
-        }
-        println!();
-        */
 
         max_buffering_needed = max_buffering_needed.max(need_to_keep_buffer);
     }

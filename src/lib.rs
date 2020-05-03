@@ -3,6 +3,10 @@ use std::fmt;
 
 pub mod field_reader;
 pub mod matcher_fields;
+pub mod gather_fields;
+
+pub use gather_fields::Slicer;
+
 pub(crate) mod pb;
 
 #[derive(Debug)]
