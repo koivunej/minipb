@@ -375,6 +375,7 @@ impl<'a, M: Matcher, G> Gathered<M, G>
         loop {
             let ret = match self.reader.next(&mut tmp)? {
                 Ok(m) => {
+                    // FIXME: it's easy to not notice that tmp is passed to inner instead of buf
                     let slicer = Slicer::wrap(buf, self.reader.offset());
                     let ret = self.gatherer.update(m, slicer)?.map(|r| Ok(Ok(r)));
                     // invalidate the cached value
@@ -391,13 +392,8 @@ impl<'a, M: Matcher, G> Gathered<M, G>
                 }
 
                 if self.cached_min_offset.is_none() {
-                    //println!("cached min is none, *buf = {} from {}, ret = {:?}", tmp.len(), buf.len(), ret);
                     *buf = tmp;
-                } else {
-                    //println!("buffering: {}", buf.len());
                 }
-
-                // FIXME: adjust the buf to contain needed again
 
                 return ret;
             }
