@@ -33,6 +33,13 @@ impl ReadField<'_> {
     pub fn wire_type(&self) -> WireType {
         self.field.kind
     }
+
+    pub fn is_length_delimited(&self) -> bool {
+        match self.field.kind {
+            WireType::LengthDelimited => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]

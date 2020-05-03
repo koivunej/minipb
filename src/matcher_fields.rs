@@ -221,6 +221,10 @@ impl<M: Matcher> MatcherFields<M> {
     pub fn into_parts(self) -> (u64, M) {
         (self.offset, self.matcher)
     }
+
+    pub fn slicer<'a>(&'a self, buf: &'a [u8]) -> Slicer<'a> {
+        Slicer::wrap(buf, self.offset)
+    }
 }
 
 impl<M: Matcher + PartialEq> MatcherFields<M> {
