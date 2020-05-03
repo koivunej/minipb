@@ -29,6 +29,10 @@ impl ReadField<'_> {
     pub fn field_len(&self) -> usize {
         self.field.bytes_to_skip()
     }
+
+    pub fn wire_type(&self) -> WireType {
+        self.field.kind
+    }
 }
 
 #[derive(Debug)]
