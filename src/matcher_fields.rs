@@ -307,7 +307,8 @@ pub struct Slicer<'a> {
 
 impl<'a> Slicer<'a> {
     pub(crate) fn wrap(buffer: &'a [u8], last_offset: u64) -> Self {
-        let first_offset = last_offset - buffer.len() as u64;
+        // println!("{:?} = {} - {}", last_offset.saturating_sub(buffer.len() as u64), last_offset, buffer.len());
+        let first_offset = last_offset.saturating_sub(buffer.len() as u64);
         Self {
             buffer,
             first_offset
@@ -315,8 +316,28 @@ impl<'a> Slicer<'a> {
     }
 
     pub fn as_slice(&self, range: &Range<u64>) -> &'a [u8] {
-        let adjusted_range = (range.start - self.first_offset) as usize..(range.end - self.first_offset) as usize;
-        &self.buffer[adjusted_range]
+        // println!("adjusted_range = ({} - {})..({} - {})", range.start, self.first_offset, range.end, self.first_offset);
+        let start = (range.start - self.first_offset) as usize;
+        let end = (range.end - self.first_offset) as usize;
+        let adjusted_range = start..end;
+        assert_eq!(range.end - range.start, (adjusted_range.end - adjusted_range.start) as u64);
+        let ret = &self.buffer[adjusted_range];
+
+        /*
+        print!("buffer: ");
+        for b in self.buffer {
+            print!("{:02x}", b);
+        }
+        println!();
+
+        print!("sliced: {:indent$}", "", indent = start * 2);
+        for b in ret {
+            print!("{:02x}", b);
+        }
+        println!();
+        */
+
+        ret
     }
 }
 
