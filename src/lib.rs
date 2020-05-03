@@ -50,7 +50,7 @@ struct FieldInfo {
 
 pub type FieldId = u32;
 
-/// Supported protobuf wire types. Note, that BeginGroup and EndGroup are not supported.
+/// Supported protobuf wire types. Note, that BeginGroup and EndGroup **are not supported**.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WireType {
     Varint,
