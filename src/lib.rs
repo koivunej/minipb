@@ -156,6 +156,154 @@ impl fmt::Display for DecodingError {
 impl std::error::Error for DecodingError {}
 
 // a single method trait would allow easy extension adapters
-pub trait Reader<'a, T: 'a> {
-    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<T, Status>, DecodingError>;
+pub trait Reader<'a> {
+    type Returned: 'a;
+    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<Self::Returned, Status>, DecodingError>;
+}
+
+/*
+trait BlockingIOExt {
+    // maybe two errors wasn't so good of an idea after all?
+    fn from_read<R>(self, read: R) -> ReadWrapper<Self, R>
+        where Self: Sized,
+              R: std::io::Read;
+}
+
+impl<'a, It: Reader<'a>> BlockingIOExt for It {
+    fn from_read<R>(self, read: R) -> ReadWrapper<Self, R>
+        where Self: Sized,
+              R: std::io::Read
+    {
+        todo!()
+    }
+}*/
+
+pub struct ReadWrapper<R, IO> {
+    reader: R,
+    inner: IO,
+    buffer: Vec<u8>,
+    grow_buffer_by: usize,
+    need_to_keep_buffer: usize,
+    exhausted: bool,
+    eof_after_buffer: bool,
+}
+
+impl<IO: std::io::Read, R> ReadWrapper<R, IO>
+    where for<'a> R: Reader<'a>
+{
+    pub fn new(reader: R, inner: IO, initial_buffer: usize) -> Self {
+        Self {
+            reader,
+            inner,
+            buffer: vec![0; initial_buffer],
+            grow_buffer_by: initial_buffer,
+            need_to_keep_buffer: 0,
+            exhausted: true,
+            eof_after_buffer: false,
+        }
+    }
+
+    fn advance<'a>(&'a mut self) -> Result<Progress<<R as Reader<'a>>::Returned>, ReadError> {
+        use std::iter::repeat;
+
+        if self.exhausted {
+            self.exhausted = false;
+            let kept = self.buffer.len();
+            if self.buffer.len() == self.buffer.capacity() {
+                self.buffer.extend(repeat(0).take(self.grow_buffer_by));
+            }
+            for _ in self.buffer.len()..self.buffer.capacity() {
+                self.buffer.push(0);
+            }
+            match self.inner.read(&mut self.buffer[kept..]) {
+                Ok(0) => {
+                    // hit eof
+                    return Ok(Progress::EOF);
+                },
+                Ok(x) if x + self.need_to_keep_buffer == self.buffer.capacity() => {
+                    // requested amount of bytes were read ok
+                },
+                Ok(y) => {
+                    self.eof_after_buffer = true;
+                    // remove zeroes from the end
+                    self.buffer.drain(self.need_to_keep_buffer + y..);
+                },
+                Err(e) => return Err(ReadError::from(e)),
+            }
+        }
+
+        let mut buf = &self.buffer[..];
+
+        match self.reader.next(&mut buf)? {
+            Ok(x) => {
+                return Ok(Progress::Value(x));
+            },
+            Err(Status::NeedMoreBytes) => {
+                // prepare to fill buffer on next round
+                self.exhausted = true;
+                if self.eof_after_buffer {
+                    return Err(ReadError::UnexpectedEndOfFile);
+                }
+                return Ok(Progress::CallAgain);
+            },
+            Err(Status::IdleAtEndOfBuffer) => {
+                if self.eof_after_buffer {
+                    return Ok(Progress::EOF);
+                }
+                return Ok(Progress::CallAgain);
+            },
+        }
+    }
+
+    fn next<'a>(&'a mut self) -> Result<Progress<<R as Reader<'a>>::Returned>, ReadError> {
+        loop {
+            // ERROR: cannot borrow *self as mutable more than once at a time
+            match self.advance() {
+                Ok(Progress::CallAgain) => continue,
+                Ok(p) => return Ok(p),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+/// Sad type required as no workaround for limiting the lifetime of `buf` inside `advance`.
+enum Progress<T> {
+    Value(T),
+    CallAgain,
+    EOF,
+}
+
+
+
+#[derive(Debug)]
+enum ReadError {
+    UnexpectedEndOfFile,
+    Decoding(DecodingError),
+    IO(std::io::Error),
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ReadError::*;
+        match self {
+            UnexpectedEndOfFile => write!(fmt, "unexpected end of file"),
+            Decoding(e) => write!(fmt, "decoding failed: {}", e),
+            IO(e) => write!(fmt, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}
+
+impl From<DecodingError> for ReadError {
+    fn from(e: DecodingError) -> Self {
+        ReadError::Decoding(e)
+    }
+}
+
+impl From<std::io::Error> for ReadError {
+    fn from(e: std::io::Error) -> Self {
+        ReadError::IO(e)
+    }
 }
