@@ -51,7 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut buffer = Vec::with_capacity(grow_buffer_by);
     let leaf_type = path.leaf_type().clone();
-    let mut matcher_fields = MatcherFields::new(PathMatcher::new(path.into_components(), leaf_type.clone()));
+    let mut matcher_fields = MatcherFields::new(
+        PathMatcher::new(
+            path.into_components(),
+            leaf_type.clone()));
 
     let mut exhausted = true;
     let mut need_to_keep_buffer = 0;
@@ -134,6 +137,150 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("{} buffer size", buffer.capacity());
     eprintln!("{} max buffer size needed", max_buffering_needed);
     Ok(())
+}
+
+struct GrowingBufRead<R> {
+    inner: R,
+    grow_by: usize,
+    consumed: usize,
+    buffer: Vec<u8>,
+}
+
+impl<R: std::io::Read> GrowingBufRead<R> {
+    fn new(reader: R, grow_by: usize) -> Self {
+        Self {
+            inner: reader,
+            grow_by,
+            consumed: 0,
+            buffer: Vec::with_capacity(grow_by),
+        }
+    }
+
+    // what kind of api could this have... maybe_buffer?
+    // consumed, like bufread?
+}
+
+struct ReaderMatcherFields<R, M: Matcher> {
+    /// The wrapped reader
+    reader: R,
+    /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
+    buffer: Vec<u8>,
+    /// Processes the bytes read into the buffer.
+    matcher: MatcherFields<M>,
+    /// The amount to grow the buffer by. It will need to be grown for larger fields, as there
+    /// currently isn't a way to read fields as slices.
+    grow_by: usize,
+    /// When true, need to read more bytes
+    exhausted: bool,
+    /// When true, any bytes in the buffer represent the last bytes of the input stream.
+    eof_after_buffer: bool,
+}
+
+impl<R, M: Matcher> ReaderMatcherFields<R, M> {
+    fn match_from(matcher: M, reader: R) -> Self {
+        let grow_by = 64;
+        Self {
+            buffer: Vec::with_capacity(grow_by),
+            reader,
+            matcher: MatcherFields::new(matcher),
+            grow_by,
+            exhausted: true,
+            eof_after_buffer: false,
+        }
+    }
+
+    fn next<'a>(&'a mut self) -> Result<Matched<M::Tag>, ReadError> {
+        loop {
+            // YES this seems to work but it might not work for gathered...
+            self.buffer.drain(..);
+            let mut buf = &self.buffer[..];
+            match self.matcher.next(&mut buf)? {
+                Ok(m) => return Ok(m),
+                Err(Status::IdleAtEndOfBuffer) => continue,
+                Err(Status::NeedMoreBytes) => continue,
+            }
+        }
+    }
+}
+
+use minipb::gather_fields::{Gatherer, GatheredFields};
+
+struct ReaderGatheredFields<R, M: Matcher, G> {
+    /// The wrapped reader
+    reader: R,
+    /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
+    buffer: Vec<u8>,
+    /// Processes the bytes read into the buffer.
+    matcher: GatheredFields<M, G>,
+    /// The amount to grow the buffer by. It will need to be grown for larger fields, as there
+    /// currently isn't a way to read fields as slices.
+    grow_by: usize,
+    /// When true, need to read more bytes
+    exhausted: bool,
+    /// When true, any bytes in the buffer represent the last bytes of the input stream.
+    eof_after_buffer: bool,
+}
+
+impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
+    where for<'a> G: Gatherer<'a, Tag = M::Tag>,
+          for<'a> <G as Gatherer<'a>>::Returned: fmt::Debug
+{
+    fn match_from(reader: R, matcher: M, gatherer: G) -> Self {
+        let grow_by = 64;
+        Self {
+            buffer: Vec::with_capacity(grow_by),
+            reader,
+            matcher: GatheredFields::new(matcher, gatherer),
+            grow_by,
+            exhausted: true,
+            eof_after_buffer: false,
+        }
+    }
+
+    fn next<'b>(&'b mut self) -> Result<<G as Gatherer<'b>>::Returned, ReadError> {
+        loop {
+            // this works with nightly and -Zpolonius
+            self.buffer.drain(..);
+            let mut buf = &self.buffer[..];
+            match self.matcher.next(&mut buf)? {
+                Ok(m) => return Ok(m),
+                Err(Status::IdleAtEndOfBuffer) => continue,
+                Err(Status::NeedMoreBytes) => continue,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ReadError {
+    UnexpectedEndOfFile,
+    Decoding(DecodingError),
+    IO(std::io::Error),
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ReadError::*;
+        match self {
+            UnexpectedEndOfFile => write!(fmt, "unexpected end of file"),
+            Decoding(e) => write!(fmt, "decoding failed: {}", e),
+            IO(e) => write!(fmt, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}
+
+impl From<DecodingError> for ReadError {
+    fn from(e: DecodingError) -> Self {
+        ReadError::Decoding(e)
+    }
+}
+
+impl From<std::io::Error> for ReadError {
+    fn from(e: std::io::Error) -> Self {
+        ReadError::IO(e)
+    }
 }
 
 #[derive(Clone)]

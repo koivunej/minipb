@@ -178,6 +178,7 @@ impl<'a, It: Reader<'a>> BlockingIOExt for It {
     }
 }*/
 
+/*
 pub struct ReadWrapper<R, IO> {
     reader: R,
     inner: IO,
@@ -307,3 +308,4 @@ impl From<std::io::Error> for ReadError {
         ReadError::IO(e)
     }
 }
+*/
