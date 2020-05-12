@@ -203,6 +203,7 @@ impl<R, M: Matcher> ReaderMatcherFields<R, M> {
     }
 }
 
+/*
 use minipb::gather_fields::{Gatherer, GatheredFields};
 
 struct ReaderGatheredFields<R, M: Matcher, G> {
@@ -250,6 +251,7 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
         }
     }
 }
+*/
 
 #[derive(Debug)]
 enum ReadError {
