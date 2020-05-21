@@ -2,9 +2,9 @@
 
 use std::convert::TryFrom;
 use std::fmt;
-use minipb::{ReadField, DecodingError, WireType, FieldId, Status};
-use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, Matched, Value};
-use minipb::gather_fields::Slicer;
+use minipb::{ReadField, DecodingError, WireType, FieldId, Status, ReadError, Reader};
+use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, SlicedMatched, SlicedValue, Value};
+use minipb::gather_fields::{Slicer, ReaderGatheredFields};
 
 /// Takes an argument like `/a/b/c::type` to navigate a (an unsigned integer) as submessage, to
 /// navigate b as a submessage, pick field c, then convert to it to `type` or error. Return all
@@ -45,244 +45,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let stdin = std::io::stdin();
-    let mut stdin = stdin.lock();
-
-    let grow_buffer_by = 64;
-
-    let mut buffer = Vec::with_capacity(grow_buffer_by);
+    let stdin = stdin.lock();
     let leaf_type = path.leaf_type().clone();
-    let mut matcher_fields = MatcherFields::new(
+    let matcher_fields = MatcherFields::new(
         PathMatcher::new(
             path.into_components(),
             leaf_type.clone()));
 
-    let mut exhausted = true;
-    let mut need_to_keep_buffer = 0;
-    let mut eof_after_buffer = false;
-
-    let mut max_buffering_needed = 0;
+    let mut reader = ReaderGatheredFields::new(stdin, matcher_fields.as_sliced());
     let mut elements = 0;
 
     loop {
-        if exhausted {
-            exhausted = false;
-            let kept = buffer.len();
-            if buffer.len() == buffer.capacity() {
-                buffer.extend(std::iter::repeat(0).take(grow_buffer_by));
-            }
-            for _ in buffer.len()..buffer.capacity() {
-                buffer.push(0);
-            }
-            match stdin.read(&mut buffer[kept..])? {
-                0 => {
-                    // hit eof
-                    break
-                },
-                x if x + need_to_keep_buffer == buffer.capacity() => {
-                    // requested amount of bytes were read ok
-                },
-                y => {
-                    eof_after_buffer = true;
-                    // remove zeroes from the end
-                    buffer.drain(need_to_keep_buffer + y..);
-                }
-            }
-        }
-
-        let mut buf = &buffer[..];
-
-        match matcher_fields.next(&mut buf)? {
-            Ok(matched @ Matched { tag: Tag::Leaf, .. }) => {
-                // FIXME: needing to know how to play between the original buffer and the adjusted
-                // buffer is ... huge effort. I just lost a lot of time again.
-                leaf_type.convert_to_stdout(matcher_fields.slicer(&buffer[..buffer.len() - buf.len()]), matched.value)?;
+        match reader.next()? {
+            Some(matched @ SlicedMatched { tag: Tag::Leaf, .. }) => {
+                leaf_type.convert_to_stdout(matched.value)?;
                 elements += 1;
             },
-            Ok(_) => {
-                // ignore markers and ignored
-            }
-            Err(Status::NeedMoreBytes) => {
-                // currently the buffer ends in between of a field, or it's tag, or possibly the
-                // field length.
-                if eof_after_buffer {
-                    panic!("unexpected EOF");
-                }
-                exhausted = true;
-            },
-            Err(Status::IdleAtEndOfBuffer) => {
-                if eof_after_buffer {
-                    // the reader got past last field and ran out of bytes before starting to read
-                    // the next field.
-                    break;
-                }
-                exhausted = true;
-            }
+            Some(_) => {}
+            None => break,
         }
-
-        // we need to keep this much of bytes to interpret the whole field. if the user wanted to
-        // match a megabyte sized field, currently the only way to get past is to match the whole
-        // megabyte field. allowing fields to be returned per slice might be quite easily added.
-        let consumed_until = buf.len();
-        let consumed = buffer.len() - consumed_until;
-
-        // we can drain the no longer needed bytes.
-        // FIXME: this should just move the window over the buffer, not drain
-        buffer.drain(..consumed);
-        need_to_keep_buffer = buffer.len();
-
-        max_buffering_needed = max_buffering_needed.max(need_to_keep_buffer);
     }
 
     eprintln!("{} elements read", elements);
-    eprintln!("{} buffer size", buffer.capacity());
-    eprintln!("{} max buffer size needed", max_buffering_needed);
     Ok(())
-}
-
-struct GrowingBufRead<R> {
-    inner: R,
-    grow_by: usize,
-    consumed: usize,
-    buffer: Vec<u8>,
-}
-
-impl<R: std::io::Read> GrowingBufRead<R> {
-    fn new(reader: R, grow_by: usize) -> Self {
-        Self {
-            inner: reader,
-            grow_by,
-            consumed: 0,
-            buffer: Vec::with_capacity(grow_by),
-        }
-    }
-
-    // what kind of api could this have... maybe_buffer?
-    // consumed, like bufread?
-}
-
-struct ReaderMatcherFields<R, M: Matcher> {
-    /// The wrapped reader
-    reader: R,
-    /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
-    buffer: Vec<u8>,
-    /// Processes the bytes read into the buffer.
-    matcher: MatcherFields<M>,
-    /// The amount to grow the buffer by. It will need to be grown for larger fields, as there
-    /// currently isn't a way to read fields as slices.
-    grow_by: usize,
-    /// When true, need to read more bytes
-    exhausted: bool,
-    /// When true, any bytes in the buffer represent the last bytes of the input stream.
-    eof_after_buffer: bool,
-}
-
-impl<R, M: Matcher> ReaderMatcherFields<R, M> {
-    fn match_from(matcher: M, reader: R) -> Self {
-        let grow_by = 64;
-        Self {
-            buffer: Vec::with_capacity(grow_by),
-            reader,
-            matcher: MatcherFields::new(matcher),
-            grow_by,
-            exhausted: true,
-            eof_after_buffer: false,
-        }
-    }
-
-    fn next<'a>(&'a mut self) -> Result<Matched<M::Tag>, ReadError> {
-        loop {
-            // YES this seems to work but it might not work for gathered...
-            self.buffer.drain(..);
-            let mut buf = &self.buffer[..];
-            match self.matcher.next(&mut buf)? {
-                Ok(m) => return Ok(m),
-                Err(Status::IdleAtEndOfBuffer) => continue,
-                Err(Status::NeedMoreBytes) => continue,
-            }
-        }
-    }
-}
-
-/*
-use minipb::gather_fields::{Gatherer, GatheredFields};
-
-struct ReaderGatheredFields<R, M: Matcher, G> {
-    /// The wrapped reader
-    reader: R,
-    /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
-    buffer: Vec<u8>,
-    /// Processes the bytes read into the buffer.
-    matcher: GatheredFields<M, G>,
-    /// The amount to grow the buffer by. It will need to be grown for larger fields, as there
-    /// currently isn't a way to read fields as slices.
-    grow_by: usize,
-    /// When true, need to read more bytes
-    exhausted: bool,
-    /// When true, any bytes in the buffer represent the last bytes of the input stream.
-    eof_after_buffer: bool,
-}
-
-impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
-    where for<'a> G: Gatherer<'a, Tag = M::Tag>,
-          for<'a> <G as Gatherer<'a>>::Returned: fmt::Debug
-{
-    fn match_from(reader: R, matcher: M, gatherer: G) -> Self {
-        let grow_by = 64;
-        Self {
-            buffer: Vec::with_capacity(grow_by),
-            reader,
-            matcher: GatheredFields::new(matcher, gatherer),
-            grow_by,
-            exhausted: true,
-            eof_after_buffer: false,
-        }
-    }
-
-    fn next<'b>(&'b mut self) -> Result<<G as Gatherer<'b>>::Returned, ReadError> {
-        loop {
-            // this works with nightly and -Zpolonius
-            self.buffer.drain(..);
-            let mut buf = &self.buffer[..];
-            match self.matcher.next(&mut buf)? {
-                Ok(m) => return Ok(m),
-                Err(Status::IdleAtEndOfBuffer) => continue,
-                Err(Status::NeedMoreBytes) => continue,
-            }
-        }
-    }
-}
-*/
-
-#[derive(Debug)]
-enum ReadError {
-    UnexpectedEndOfFile,
-    Decoding(DecodingError),
-    IO(std::io::Error),
-}
-
-impl fmt::Display for ReadError {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ReadError::*;
-        match self {
-            UnexpectedEndOfFile => write!(fmt, "unexpected end of file"),
-            Decoding(e) => write!(fmt, "decoding failed: {}", e),
-            IO(e) => write!(fmt, "{}", e),
-        }
-    }
-}
-
-impl std::error::Error for ReadError {}
-
-impl From<DecodingError> for ReadError {
-    fn from(e: DecodingError) -> Self {
-        ReadError::Decoding(e)
-    }
-}
-
-impl From<std::io::Error> for ReadError {
-    fn from(e: std::io::Error) -> Self {
-        ReadError::IO(e)
-    }
 }
 
 #[derive(Clone)]
@@ -309,52 +94,41 @@ impl fmt::Display for ConversionError {
 impl std::error::Error for ConversionError {}
 
 impl LeafType {
-    fn convert_to_stdout(&self, slicer: Slicer<'_>, value: Value) -> Result<(), ConversionError> {
+    fn convert_to_stdout(&self, value: SlicedValue<'_>) -> Result<(), ConversionError> {
         use LeafType::*;
+        use SlicedValue::*;
         match (&self, value) {
-            (Slice, Value::Slice(range))
-            | (Debug, Value::Slice(range)) => {
-                let slice = slicer.as_slice(&range);
+            (LeafType::Slice, SlicedValue::Slice(_, slice))
+            | (Debug, SlicedValue::Slice(_, slice)) => {
                 for b in slice {
                     print!("{:02x}", b);
                 }
                 println!();
             },
-            (Str, Value::Slice(range)) => {
-                let slice = slicer.as_slice(&range);
+            (Str, SlicedValue::Slice(range, slice)) => {
                 match std::str::from_utf8(slice) {
                     Ok(s) => println!("{}", s),
                     Err(_) => return Err(ConversionError(Value::Slice(range), "invalid utf8")),
                 }
             },
-            (U64, Value::Varint(x)) | (U64, Value::Fixed64(x)) => println!("{}", x),
-            (U64, Value::Fixed32(x)) => println!("{}", x),
-            (I64, Value::Varint(_x)) | (I64, Value::Fixed64(_x)) => {
+            (U64, Varint(x)) | (U64, Fixed64(x)) => println!("{}", x),
+            (U64, Fixed32(x)) => println!("{}", x),
+            (I64, Varint(_x)) | (I64, Fixed64(_x)) => {
                 todo!("zigzag")
             }
-            (F32, Value::Fixed32(x)) => {
+            (F32, Fixed32(x)) => {
                 println!("{}", f32::from_bits(x))
             },
-            (F64, Value::Fixed64(x)) => {
+            (F64, Fixed64(x)) => {
                 println!("{}", f64::from_bits(x))
             },
-            (Bool, Value::Varint(x)) => println!("{}", x == 1),
+            (Bool, Varint(x)) => println!("{}", x == 1),
             (Debug, value) => println!("{:?}", value),
             _ => todo!()
         }
 
         Ok(())
     }
-
-        /*
-    fn accepts(&self, value: &Value) -> bool {
-        use LeafType::*;
-        match self {
-            Slice | Str | Debug if value.field_len() > 0 => true,
-            _ => false,
-        }
-    }
-        */
 }
 
 impl TryFrom<&'_ str> for LeafType {

@@ -209,10 +209,15 @@ impl<M: Matcher> MatcherFields<M> {
     }
 
     /// Needs to be called with the buffer before the previous call to next has advanced it.
-    pub fn slicer<'a>(&'a self, buf: &'a [u8]) -> Slicer<'a> {
+    pub fn slicer<'a>(&self, buf: &'a [u8]) -> Slicer<'a> {
         Slicer::wrap(buf, self.offset)
     }
 
+    pub fn as_sliced(self) -> SlicedMatcherFields<M> {
+        SlicedMatcherFields {
+            inner: self,
+        }
+    }
 }
 
 impl<'a, M: Matcher> crate::Reader<'a> for MatcherFields<M> {
@@ -232,9 +237,47 @@ impl<'a, M: Matcher> crate::Reader<'a> for MatcherFields<M> {
     }
 }
 
+/// MatcherFields but will return `SlicedMatched` instead of `Matched`.
+pub struct SlicedMatcherFields<M: Matcher> {
+    inner: MatcherFields<M>,
+}
 
-impl<M: Matcher + PartialEq> MatcherFields<M> {
-    // TODO: something to advance to wanted matcher state
+impl<'a, M: Matcher> crate::Reader<'a> for SlicedMatcherFields<M> {
+    type Returned = SlicedMatched<'a, M::Tag>;
+
+    fn next(
+        &mut self,
+        buf: &mut &'a [u8],
+    ) -> Result<Result<SlicedMatched<'a, M::Tag>, Status>, DecodingError> {
+        let orig: &'a [u8] = *buf;
+        match self.inner.next(buf)? {
+            Ok(Matched { tag, offset, value: Value::Slice(range) }) => {
+                let slicer = self.inner.slicer(&orig[..(orig.len() - buf.len())]);
+
+                let bytes = slicer.as_slice(&range);
+
+                Ok(Ok(SlicedMatched {
+                    tag,
+                    offset,
+                    value: SlicedValue::Slice(range, bytes),
+                }))
+            }
+            Ok(Matched { tag, offset, value }) => {
+                Ok(Ok(SlicedMatched {
+                    tag,
+                    offset,
+                    value: match value {
+                        Value::Marker => SlicedValue::Marker,
+                        Value::Varint(x) => SlicedValue::Varint(x),
+                        Value::Fixed64(x) => SlicedValue::Fixed64(x),
+                        Value::Fixed32(x) => SlicedValue::Fixed32(x),
+                        Value::Slice(_) => unreachable!("already matched it in an earlier arm")
+                    }
+                }))
+            }
+            Err(e) => Ok(Err(e))
+        }
+    }
 }
 
 /// An item tagged by a [`Matcher`] from the stream of fields read by
@@ -246,18 +289,13 @@ pub struct Matched<T> {
     pub value: Value,
 }
 
-/// Instruction to process the field as follows, with the given tag.
+/// An item tagged by a [`Matcher`] from the stream of fields read by
+/// [`MatcherFields`] with Value::Slice turned into a byte slice.
 #[derive(Debug)]
-pub enum Cont<T> {
-    /// Start processing the field as a nested message. Outputs the given tag to mark this.
-    Message(Option<T>),
-    /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
-    /// amount available. This will require the caller to buffer this much data.
-    ReadSlice(T),
-    // FIXME: here could be a ReadPartialSlice to stream bytes when they arrive, that will require
-    // though cloneable tags, which wouldn't be a huge deal.
-    /// Process the field as non-length delimited field with the given tag.
-    ReadValue(T),
+pub struct SlicedMatched<'a, T> {
+    pub tag: T,
+    pub offset: u64,
+    pub value: SlicedValue<'a>,
 }
 
 /// Represents a matched value.
@@ -274,6 +312,48 @@ pub enum Value {
     Fixed32(u32),
     /// A length delimited field read as slice.
     Slice(Range<u64>),
+}
+
+/// Represents a sliced matched value.
+#[derive(Debug, Clone)]
+pub enum SlicedValue<'a> {
+    /// Value does not exist in the stream, but it represents a state change taken by the
+    /// [`Matcher`].
+    Marker,
+    /// Number read as a [`WireType::Varint`]
+    Varint(u64),
+    /// Value read as a [`WireType::Fixed64`]
+    Fixed64(u64),
+    /// Value read as a [`WireType::Fixed32`]
+    Fixed32(u32),
+    /// A length delimited field read as slice.
+    Slice(Range<u64>, &'a [u8]),
+}
+
+impl From<SlicedValue<'_>> for Value {
+    fn from(sv: SlicedValue<'_>) -> Self {
+        match sv {
+            SlicedValue::Marker => Self::Marker,
+            SlicedValue::Varint(x) => Self::Varint(x),
+            SlicedValue::Fixed64(x) => Self::Fixed64(x),
+            SlicedValue::Fixed32(x) => Self::Fixed32(x),
+            SlicedValue::Slice(range, _) => Self::Slice(range),
+        }
+    }
+}
+
+/// Instruction to process the field as follows, with the given tag.
+#[derive(Debug)]
+pub enum Cont<T> {
+    /// Start processing the field as a nested message. Outputs the given tag to mark this.
+    Message(Option<T>),
+    /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
+    /// amount available. This will require the caller to buffer this much data.
+    ReadSlice(T),
+    // FIXME: here could be a ReadPartialSlice to stream bytes when they arrive, that will require
+    // though cloneable tags, which wouldn't be a huge deal.
+    /// Process the field as non-length delimited field with the given tag.
+    ReadValue(T),
 }
 
 impl Value {
