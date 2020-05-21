@@ -26,10 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let mut reader = ReaderGatheredFields::new(stdin.lock(), gatherer);
 
     loop {
-        match reader.next() {
-            Ok(Some(link)) => println!("{:?}", link),
-            Ok(None) => break,
-            Err(e) => panic!("{}", e),
+        match reader.next()? {
+            Some(link) => println!("{:?}", link),
+            None => break,
         }
     }
 
