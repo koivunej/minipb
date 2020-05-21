@@ -51,11 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matcher_fields =
         MatcherFields::new(PathMatcher::new(path.into_components(), leaf_type.clone()));
 
-    let mut reader = ReaderGatheredFields::new(stdin, matcher_fields.as_sliced());
+    let mut reader = ReaderGatheredFields::new(stdin, matcher_fields.into_sliced());
     let mut elements = 0;
 
     loop {
-        match reader.next()? {
+        match reader.read_next()? {
             Some(matched @ SlicedMatched { tag: Tag::Leaf, .. }) => {
                 leaf_type.convert_to_stdout(matched.value)?;
                 elements += 1;

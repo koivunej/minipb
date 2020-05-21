@@ -41,8 +41,10 @@ where
     /// There might be Interrupted errors while reading, which are **not** ignored like the
     /// `std::io::BufRead` does for example. After the interruption the next can be called again
     /// only if the inner `std::io::Read` can continue reading where it was left off.
+    ///
+    /// FIXME: this might be used to implement Iterator?
     #[cfg(not(polonius))]
-    pub fn next(&'a mut self) -> Result<Option<R::Returned>, ReadError> {
+    pub fn read_next(&'a mut self) -> Result<Option<R::Returned>, ReadError> {
         use std::mem::transmute;
         loop {
             self.maybe_fill()?;

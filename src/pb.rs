@@ -42,7 +42,7 @@ pub fn read_varint(
     let mut count = 0;
 
     for b in data.iter().take(max_bytes) {
-        val |= ((b & mask) as u64) << count * 7;
+        val |= ((b & mask) as u64) << (count * 7);
         count += 1;
 
         if b & 0x80 == 0 {

@@ -75,7 +75,7 @@ impl<M: Matcher> MatcherFields<M> {
     ) -> Result<Result<Option<Matched<M::Tag>>, Status>, DecodingError> {
         match &mut self.state {
             State::Ready => match self.reader.next(buf)? {
-                Err(s) => return Ok(Err(s)),
+                Err(s) => Ok(Err(s)),
                 Ok(read) => {
                     let consumed = read.consumed();
                     let _decoded = &buf[..consumed];
@@ -125,7 +125,7 @@ impl<M: Matcher> MatcherFields<M> {
 
                     self.state = State::DecidingAfter;
 
-                    return Ok(Ok(ret));
+                    Ok(Ok(ret))
                 }
             },
             State::DecidingAfter => {
@@ -177,7 +177,7 @@ impl<M: Matcher> MatcherFields<M> {
 
                 self.state = State::DecidingAfter;
 
-                return Ok(Ok(Some(ret)));
+                Ok(Ok(Some(ret)))
             }
             State::Skipping(_, _, _, amount) => {
                 let amt = *amount;
@@ -207,7 +207,7 @@ impl<M: Matcher> MatcherFields<M> {
 
                 // TODO: again, a size hint wouldn't hurt, especially if the user is reading from
                 // std::io::Seek or similar; these could just be not read at all.
-                return Ok(Err(Status::NeedMoreBytes));
+                Ok(Err(Status::NeedMoreBytes))
             }
         }
     }
@@ -221,7 +221,7 @@ impl<M: Matcher> MatcherFields<M> {
         Slicer::wrap(buf, self.offset)
     }
 
-    pub fn as_sliced(self) -> SlicedMatcherFields<M> {
+    pub fn into_sliced(self) -> SlicedMatcherFields<M> {
         SlicedMatcherFields { inner: self }
     }
 }
