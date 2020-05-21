@@ -10,7 +10,7 @@ pub use read::ReaderGatheredFields;
 /// protobuf files can come at any order, and previous values can be overridden by later fields.
 pub trait Gatherer<'a> {
     /// The marker type matched by this gatherer
-    type Tag;
+    type Tag: 'static;
 
     /// Returned combined value from this gatherer
     type Returned: 'a;

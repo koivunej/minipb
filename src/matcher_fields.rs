@@ -5,7 +5,7 @@ use std::ops::Range;
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
     /// Tag describing to caller how to process the field
-    type Tag;
+    type Tag: 'static;
 
     /// Advance the matcher on a new field read.
     ///
@@ -204,7 +204,21 @@ impl<M: Matcher> MatcherFields<M> {
         }
     }
 
-    pub fn next<'a>(
+    pub fn into_parts(self) -> (u64, M) {
+        (self.offset, self.matcher)
+    }
+
+    /// Needs to be called with the buffer before the previous call to next has advanced it.
+    pub fn slicer<'a>(&'a self, buf: &'a [u8]) -> Slicer<'a> {
+        Slicer::wrap(buf, self.offset)
+    }
+
+}
+
+impl<'a, M: Matcher> crate::Reader<'a> for MatcherFields<M> {
+    type Returned = Matched<M::Tag>;
+
+    fn next(
         &mut self,
         buf: &mut &'a [u8],
     ) -> Result<Result<Matched<M::Tag>, Status>, DecodingError> {
@@ -216,16 +230,8 @@ impl<M: Matcher> MatcherFields<M> {
             }
         }
     }
-
-    pub fn into_parts(self) -> (u64, M) {
-        (self.offset, self.matcher)
-    }
-
-    /// Needs to be called with the buffer before the previous call to next has advanced it.
-    pub fn slicer<'a>(&'a self, buf: &'a [u8]) -> Slicer<'a> {
-        Slicer::wrap(buf, self.offset)
-    }
 }
+
 
 impl<M: Matcher + PartialEq> MatcherFields<M> {
     // TODO: something to advance to wanted matcher state
