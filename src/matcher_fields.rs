@@ -36,9 +36,15 @@ pub struct MatcherFields<M: Matcher> {
 
 #[derive(Debug)]
 enum State<T> {
+    /// Initial state and where we can also stop because of EOF.
     Ready,
+    /// Entered after processing a field value (nested message, slice, or scalar) and stayed as
+    /// long as matcher.decide_after returns `(true, _)` as multiple nested messages will stop on
+    /// the same byte offset.
     DecidingAfter,
-    Gathering(T, u64, u64, u64),
+    /// Entered to buffer up a complete slice (bytes or str).
+    Buffering(T, u64, u64, u64),
+    /// Skipping a complete field, which can be long.
     Skipping(T, u64, u64, u64),
 }
 
@@ -67,12 +73,67 @@ impl<M: Matcher> MatcherFields<M> {
         &mut self,
         buf: &mut &'a [u8],
     ) -> Result<Result<Option<Matched<M::Tag>>, Status>, DecodingError> {
-        //println!("{:<4} {:<4} {:?}", self.offset, buf.len(), self.state);
         match &mut self.state {
+            State::Ready => match self.reader.next(buf)? {
+                Err(s) => return Ok(Err(s)),
+                Ok(read) => {
+                    let consumed = read.consumed();
+                    let _decoded = &buf[..consumed];
+                    *buf = &buf[consumed..];
+                    let read_at = self.offset;
+                    self.offset += consumed as u64;
+
+                    // when possibly going deeper, only one decision is enough.
+                    let decision = self.matcher.decide_before(read_at as usize, &read)?;
+
+                    let ret = match decision {
+                        Ok(Cont::Message(maybe_tag)) => maybe_tag.map(|tag| Matched {
+                            tag,
+                            offset: read_at,
+                            value: Value::Marker,
+                        }),
+                        Ok(Cont::ReadValue(tag)) => {
+                            // why isn't this a move? because FieldReader owns the FieldInfo
+                            let value = match &read.field.value {
+                                FieldValue::Varint(x) => Value::Varint(*x),
+                                FieldValue::Fixed64(x) => Value::Fixed64(*x),
+                                FieldValue::Fixed32(x) => Value::Fixed32(*x),
+                                x => panic!("{:?} returned for a length delimited field which is invalid. Either Cont::ReadSlice or Skip the field.", x),
+                            };
+
+                            Some(Matched {
+                                tag,
+                                offset: read_at,
+                                value,
+                            })
+                        }
+                        Ok(Cont::ReadSlice(tag)) => {
+                            self.state = State::Buffering(
+                                tag,
+                                read_at,
+                                self.offset,
+                                read.field_len() as u64,
+                            );
+                            return Ok(Ok(None));
+                        }
+                        Err(Skip(tag)) => {
+                            let total = read.field_len();
+                            self.state = State::Skipping(tag, read_at, self.offset, total as u64);
+                            return Ok(Ok(None));
+                        }
+                    };
+
+                    self.state = State::DecidingAfter;
+
+                    return Ok(Ok(ret));
+                }
+            },
             State::DecidingAfter => {
                 let (again, maybe_tag) = self.matcher.decide_after(self.offset as usize);
 
                 if !again {
+                    // the `again` would had been true if multiple levels of nested messages ended
+                    // at the same byte
                     self.state = State::Ready;
                 }
 
@@ -86,9 +147,10 @@ impl<M: Matcher> MatcherFields<M> {
                     Ok(Ok(None))
                 }
             }
-            State::Gathering(_, _, _, amount) => {
+            State::Buffering(_, _, _, amount) => {
                 if (buf.len() as u64) < *amount {
-                    //println!("    => need {} more bytes", *amount - buf.len() as u64);
+                    // TODO: it'd be great to tell how many we are expecting, a size hint, so that
+                    // the caller could bail out on too large payloads.
                     return Ok(Err(Status::NeedMoreBytes));
                 }
 
@@ -103,7 +165,7 @@ impl<M: Matcher> MatcherFields<M> {
                 // this trick is needed to avoid Matcher::Tag: Copy
                 let (tag, read_at, start) =
                     match std::mem::replace(&mut self.state, State::DecidingAfter) {
-                        State::Gathering(tag, read_at, start, _) => (tag, read_at, start),
+                        State::Buffering(tag, read_at, start, _) => (tag, read_at, start),
                         _ => unreachable!(),
                     };
 
@@ -114,7 +176,6 @@ impl<M: Matcher> MatcherFields<M> {
                 };
 
                 self.state = State::DecidingAfter;
-                //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
 
                 return Ok(Ok(Some(ret)));
             }
@@ -139,72 +200,15 @@ impl<M: Matcher> MatcherFields<M> {
                         offset: read_at,
                         value: Value::Slice(start..self.offset),
                     };
-                    //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
                     return Ok(Ok(Some(ret)));
                 }
 
                 *amount = remaining;
+
+                // TODO: again, a size hint wouldn't hurt, especially if the user is reading from
+                // std::io::Seek or similar; these could just be not read at all.
                 return Ok(Err(Status::NeedMoreBytes));
             }
-            State::Ready => match self.reader.next(buf)? {
-                Err(s) => return Ok(Err(s)),
-                Ok(read) => {
-                    let consumed = read.consumed();
-                    let _decoded = &buf[..consumed];
-                    *buf = &buf[consumed..];
-                    let read_at = self.offset;
-                    self.offset += consumed as u64;
-
-                    let decision = self.matcher.decide_before(read_at as usize, &read)?;
-                    //println!("    => decision before {:?}", decision);
-
-                    let ret = match decision {
-                        Ok(Cont::Message(maybe_tag)) => {
-                            //println!("    => starting submessage with buf.len() = {}", buf.len());
-                            maybe_tag.map(|tag| Matched {
-                                tag,
-                                offset: read_at,
-                                value: Value::Marker,
-                            })
-                        }
-                        Ok(Cont::ReadValue(tag)) => {
-                            let value = match &read.field.value {
-                                FieldValue::Varint(x) => Value::Varint(*x),
-                                FieldValue::Fixed64(x) => Value::Fixed64(*x),
-                                FieldValue::Fixed32(x) => Value::Fixed32(*x),
-                                x => unreachable!("unexpected {:?}", x),
-                            };
-
-                            Some(Matched {
-                                tag,
-                                offset: read_at,
-                                value,
-                            })
-                        }
-                        Ok(Cont::ReadSlice(tag)) => {
-                            //println!("    => starting to gather with buf.len() = {}", buf.len());
-                            self.state = State::Gathering(
-                                tag,
-                                read_at,
-                                self.offset,
-                                read.field_len() as u64,
-                            );
-                            return Ok(Ok(None));
-                        }
-                        Err(Skip(tag)) => {
-                            let total = read.field_len();
-                            self.state = State::Skipping(tag, read_at, self.offset, total as u64);
-                            return Ok(Ok(None));
-                        }
-                    };
-
-                    self.state = State::DecidingAfter;
-
-                    //println!("    => {:?} and returning Ok(Ok({:?}))", self.state, ret);
-
-                    return Ok(Ok(ret));
-                }
-            },
         }
     }
 
@@ -212,7 +216,7 @@ impl<M: Matcher> MatcherFields<M> {
         (self.offset, self.matcher)
     }
 
-    /// Needs to be called with the buffer before the previous call to next has advanced it.
+    /// Needs to be called with **the buffer before the previous call** to `next` has advanced it.
     pub fn slicer<'a>(&self, buf: &'a [u8]) -> Slicer<'a> {
         Slicer::wrap(buf, self.offset)
     }
@@ -251,6 +255,7 @@ impl<'a, M: Matcher> crate::Reader<'a> for SlicedMatcherFields<M> {
         &mut self,
         buf: &mut &'a [u8],
     ) -> Result<Result<SlicedMatched<'a, M::Tag>, Status>, DecodingError> {
+        // store for later slicing
         let orig: &'a [u8] = *buf;
         match self.inner.next(buf)? {
             Ok(Matched {
@@ -259,7 +264,6 @@ impl<'a, M: Matcher> crate::Reader<'a> for SlicedMatcherFields<M> {
                 value: Value::Slice(range),
             }) => {
                 let slicer = self.inner.slicer(&orig[..(orig.len() - buf.len())]);
-
                 let bytes = slicer.as_slice(&range);
 
                 Ok(Ok(SlicedMatched {
