@@ -98,7 +98,14 @@ impl<M: Matcher, G> GatheredFields<M, G>
             let ret = match self.reader.next(&mut tmp)? {
                 Ok(m) => {
                     // FIXME: it's easy to not notice that tmp is passed to inner instead of buf
-                    let slicer = Slicer::wrap(buf, self.reader.offset());
+                    // and even that is wrong in the case of reading more than 1 byte at a time!
+
+                    let end = buf.len() - tmp.len();
+                    let sliced_from = &buf[..end];
+
+                    // println!("{:02x?}", sliced_from);
+
+                    let slicer = Slicer::wrap(sliced_from, self.reader.offset());
                     let ret = self.gatherer.update(m, slicer)?.map(|r| Ok(Ok(r)));
                     // invalidate the cached value
                     self.cached_min_offset.take();
