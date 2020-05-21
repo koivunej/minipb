@@ -1,5 +1,5 @@
 use crate::field_reader::FieldReader;
-use crate::{DecodingError, FieldValue, ReadField, Status, Slicer};
+use crate::{DecodingError, FieldValue, ReadField, Slicer, Status};
 use std::ops::Range;
 
 /// State machine one needs to write in order to know how to handle nested fields.
@@ -184,13 +184,17 @@ impl<M: Matcher> MatcherFields<M> {
                         Ok(Cont::ReadSlice(tag)) => {
                             //println!("    => starting to gather with buf.len() = {}", buf.len());
                             self.state = State::Gathering(
-                                tag, read_at, self.offset, read.field_len() as u64);
+                                tag,
+                                read_at,
+                                self.offset,
+                                read.field_len() as u64,
+                            );
                             return Ok(Ok(None));
                         }
                         Err(Skip(tag)) => {
                             let total = read.field_len();
                             self.state = State::Skipping(tag, read_at, self.offset, total as u64);
-                            return Ok(Ok(None))
+                            return Ok(Ok(None));
                         }
                     };
 
@@ -214,9 +218,7 @@ impl<M: Matcher> MatcherFields<M> {
     }
 
     pub fn as_sliced(self) -> SlicedMatcherFields<M> {
-        SlicedMatcherFields {
-            inner: self,
-        }
+        SlicedMatcherFields { inner: self }
     }
 }
 
@@ -251,7 +253,11 @@ impl<'a, M: Matcher> crate::Reader<'a> for SlicedMatcherFields<M> {
     ) -> Result<Result<SlicedMatched<'a, M::Tag>, Status>, DecodingError> {
         let orig: &'a [u8] = *buf;
         match self.inner.next(buf)? {
-            Ok(Matched { tag, offset, value: Value::Slice(range) }) => {
+            Ok(Matched {
+                tag,
+                offset,
+                value: Value::Slice(range),
+            }) => {
                 let slicer = self.inner.slicer(&orig[..(orig.len() - buf.len())]);
 
                 let bytes = slicer.as_slice(&range);
@@ -262,20 +268,18 @@ impl<'a, M: Matcher> crate::Reader<'a> for SlicedMatcherFields<M> {
                     value: SlicedValue::Slice(range, bytes),
                 }))
             }
-            Ok(Matched { tag, offset, value }) => {
-                Ok(Ok(SlicedMatched {
-                    tag,
-                    offset,
-                    value: match value {
-                        Value::Marker => SlicedValue::Marker,
-                        Value::Varint(x) => SlicedValue::Varint(x),
-                        Value::Fixed64(x) => SlicedValue::Fixed64(x),
-                        Value::Fixed32(x) => SlicedValue::Fixed32(x),
-                        Value::Slice(_) => unreachable!("already matched it in an earlier arm")
-                    }
-                }))
-            }
-            Err(e) => Ok(Err(e))
+            Ok(Matched { tag, offset, value }) => Ok(Ok(SlicedMatched {
+                tag,
+                offset,
+                value: match value {
+                    Value::Marker => SlicedValue::Marker,
+                    Value::Varint(x) => SlicedValue::Varint(x),
+                    Value::Fixed64(x) => SlicedValue::Fixed64(x),
+                    Value::Fixed32(x) => SlicedValue::Fixed32(x),
+                    Value::Slice(_) => unreachable!("already matched it in an earlier arm"),
+                },
+            })),
+            Err(e) => Ok(Err(e)),
         }
     }
 }
@@ -360,7 +364,7 @@ impl Value {
     pub fn slice_len(&self) -> Result<usize, ()> {
         match self {
             Value::Slice(Range { start, end }) => Ok((end - start) as usize),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }

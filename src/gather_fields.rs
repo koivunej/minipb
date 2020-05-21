@@ -1,6 +1,6 @@
-use std::ops::Range;
+use crate::matcher_fields::{Matched, Matcher, MatcherFields};
 use crate::{DecodingError, Status};
-use crate::matcher_fields::{Matcher, MatcherFields, Matched};
+use std::ops::Range;
 
 mod read;
 pub use read::ReaderGatheredFields;
@@ -15,7 +15,11 @@ pub trait Gatherer<'a> {
     type Returned: 'a;
 
     /// Records field matches required for `Returned` and possibly returns when needed.
-    fn update(&mut self, matched: Matched<Self::Tag>, slicer: Slicer<'a>) -> Result<Option<Self::Returned>, DecodingError>;
+    fn update(
+        &mut self,
+        matched: Matched<Self::Tag>,
+        slicer: Slicer<'a>,
+    ) -> Result<Option<Self::Returned>, DecodingError>;
 
     /// Returns the minimum stored input offset or None
     fn min_offset(&self) -> Option<u64>;
@@ -33,7 +37,7 @@ impl<'a> Slicer<'a> {
         let first_offset = last_offset.saturating_sub(buffer.len() as u64);
         Self {
             buffer,
-            first_offset
+            first_offset,
         }
     }
 
@@ -41,7 +45,10 @@ impl<'a> Slicer<'a> {
         let start = (range.start - self.first_offset) as usize;
         let end = (range.end - self.first_offset) as usize;
         let adjusted_range = start..end;
-        assert_eq!(range.end - range.start, (adjusted_range.end - adjusted_range.start) as u64);
+        assert_eq!(
+            range.end - range.start,
+            (adjusted_range.end - adjusted_range.start) as u64
+        );
 
         &self.buffer[adjusted_range]
     }
@@ -57,23 +64,28 @@ pub struct GatheredFields<M: Matcher, G> {
 }
 
 impl<M: Matcher, G> GatheredFields<M, G>
-    where for<'a> G: Gatherer<'a, Tag = M::Tag>
+where
+    for<'a> G: Gatherer<'a, Tag = M::Tag>,
 {
     pub fn new(matcher: M, gatherer: G) -> Self {
         Self {
             reader: MatcherFields::new(matcher),
             gatherer,
-            cached_min_offset: None
+            cached_min_offset: None,
         }
     }
 }
 
 impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
-    where G: Gatherer<'a, Tag = M::Tag>
+where
+    G: Gatherer<'a, Tag = M::Tag>,
 {
     type Returned = G::Returned;
 
-    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<<G as Gatherer<'a>>::Returned, Status>, DecodingError> {
+    fn next(
+        &mut self,
+        buf: &mut &'a [u8],
+    ) -> Result<Result<<G as Gatherer<'a>>::Returned, Status>, DecodingError> {
         let mut tmp = if let Some(min) = self.cached_min_offset {
             // this means that min is stored at buf[0] and buf[diff] is the next byte the inner
             // reader(s) need to look at
@@ -97,8 +109,8 @@ impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
                     // invalidate the cached value
                     self.cached_min_offset.take();
                     ret
-                },
-                Err(e) => Some(Ok(Err(e)))
+                }
+                Err(e) => Some(Ok(Err(e))),
             };
 
             if let Some(ret) = ret {

@@ -1,4 +1,4 @@
-use crate::{ReadError, Status, Reader};
+use crate::{ReadError, Reader, Status};
 
 /// A poor mans `std::io::BufRead` but with a growing buffer.
 // TODO: get this working with Reader<'a> trait
@@ -21,8 +21,9 @@ pub struct ReaderGatheredFields<IO, R> {
 }
 
 impl<'a, IO, R> ReaderGatheredFields<IO, R>
-    where IO: std::io::Read,
-          R: Reader<'a>
+where
+    IO: std::io::Read,
+    R: Reader<'a>,
 {
     pub fn new(inner: IO, matcher: R) -> Self {
         let grow_by = 8192;
@@ -77,9 +78,12 @@ impl<'a, IO, R> ReaderGatheredFields<IO, R>
                 match ret {
                     Ok(m) => return Ok(Some(m)),
                     Err(Status::IdleAtEndOfBuffer) if self.eof_after_buffer => return Ok(None),
-                    Err(Status::NeedMoreBytes) if self.eof_after_buffer => return Err(ReadError::UnexpectedEndOfFile),
-                    Err(Status::IdleAtEndOfBuffer)
-                    | Err(Status::NeedMoreBytes) => self.exhausted = true,
+                    Err(Status::NeedMoreBytes) if self.eof_after_buffer => {
+                        return Err(ReadError::UnexpectedEndOfFile)
+                    }
+                    Err(Status::IdleAtEndOfBuffer) | Err(Status::NeedMoreBytes) => {
+                        self.exhausted = true
+                    }
                 }
             }
         }

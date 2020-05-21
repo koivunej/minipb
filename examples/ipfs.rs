@@ -1,12 +1,12 @@
 #![warn(rust_2018_idioms)]
 
-use std::fmt;
 use std::borrow::Cow;
+use std::fmt;
 use std::ops::Range;
 
-use minipb::matcher_fields::{Cont, Matcher, Skip, Matched, Value};
-use minipb::gather_fields::{GatheredFields, Slicer, Gatherer, ReaderGatheredFields};
-use minipb::{ReadField, DecodingError, FieldId};
+use minipb::gather_fields::{GatheredFields, Gatherer, ReaderGatheredFields, Slicer};
+use minipb::matcher_fields::{Cont, Matched, Matcher, Skip, Value};
+use minipb::{DecodingError, FieldId, ReadField};
 
 struct HexOnly<'a>(&'a [u8]);
 
@@ -83,13 +83,13 @@ impl Matcher for MerkleDag {
                     until: offset + read.bytes_to_skip(),
                 };
                 return Ok(Ok(Cont::Message(Some(DagPbElement::StartUserBytes))));
-            },
+            }
             Top if read.field_id() == 2 => {
                 *self = Link {
                     until: offset + read.bytes_to_skip(),
                 };
                 return Ok(Ok(Cont::Message(Some(DagPbElement::StartPbLink))));
-            },
+            }
             Top => {}
             Link { until } => {
                 if offset >= *until {
@@ -102,7 +102,7 @@ impl Matcher for MerkleDag {
                     3 => Ok(Cont::ReadValue(DagPbElement::PbLinkTotalSize)),
                     x => Err(Skip(DagPbElement::PbLinkExtraField(x))),
                 });
-            },
+            }
             UserBytes { until } => {
                 if offset >= *until {
                     return Err(DecodingError::FailedMatcherNesting(offset, *until));
@@ -168,17 +168,28 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
     type Tag = DagPbElement;
     type Returned = PBLink<'a>;
 
-    fn update(&mut self, matched: Matched<DagPbElement>, slicer: Slicer<'a>) -> Result<Option<Self::Returned>, DecodingError> {
+    fn update(
+        &mut self,
+        matched: Matched<DagPbElement>,
+        slicer: Slicer<'a>,
+    ) -> Result<Option<Self::Returned>, DecodingError> {
         use DagPbElement::*;
 
         let (field, value) = match matched {
-            Matched { tag: EndPbLink, offset, .. } => {
-
+            Matched {
+                tag: EndPbLink,
+                offset,
+                ..
+            } => {
                 // important that we don't keep these between links
-                let values = (self.start.take(), self.hash.take(), self.name.take(), self.total_size.take());
+                let values = (
+                    self.start.take(),
+                    self.hash.take(),
+                    self.name.take(),
+                    self.total_size.take(),
+                );
 
                 if let (Some(start), Some(hr), Some(nr), Some(total_size)) = values {
-
                     let hash = Cow::Borrowed(slicer.as_slice(&hr));
                     let name = slicer.as_slice(&nr);
                     let name = Cow::Borrowed(std::str::from_utf8(name).unwrap());
@@ -191,24 +202,42 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
                     }));
                 }
 
-                return Ok(None)
-            },
-            Matched { tag: PbLinkHash, value, .. } => (&mut self.hash, value),
-            Matched { tag: PbLinkName, value, .. } => (&mut self.name, value),
-            Matched { tag: PbLinkTotalSize, value, .. } => {
+                return Ok(None);
+            }
+            Matched {
+                tag: PbLinkHash,
+                value,
+                ..
+            } => (&mut self.hash, value),
+            Matched {
+                tag: PbLinkName,
+                value,
+                ..
+            } => (&mut self.name, value),
+            Matched {
+                tag: PbLinkTotalSize,
+                value,
+                ..
+            } => {
                 self.total_size = match value {
                     Value::Varint(x) => Some(x),
-                    _ => None
+                    _ => None,
                 };
-                return Ok(None)
-            },
-            Matched { tag: StartPbLink, offset, .. } => {
-                self.start = Some(offset);
-                return Ok(None)
-            },
-            Matched { tag: _tag, offset: _offset, value: _value } => {
-                return Ok(None)
+                return Ok(None);
             }
+            Matched {
+                tag: StartPbLink,
+                offset,
+                ..
+            } => {
+                self.start = Some(offset);
+                return Ok(None);
+            }
+            Matched {
+                tag: _tag,
+                offset: _offset,
+                value: _value,
+            } => return Ok(None),
         };
 
         *field = match value {
@@ -216,7 +245,7 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
             _ => None,
         };
 
-        return Ok(None)
+        return Ok(None);
     }
 
     fn min_offset(&self) -> Option<u64> {
@@ -225,7 +254,7 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
         match (h, n) {
             (Some(h), Some(n)) => Some(h.min(n)),
             (Some(x), _) | (_, Some(x)) => Some(x),
-            _ => None
+            _ => None,
         }
     }
 }

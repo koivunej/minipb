@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 
+use minipb::gather_fields::ReaderGatheredFields;
+use minipb::matcher_fields::{
+    Cont, Matcher, MatcherFields, Skip, SlicedMatched, SlicedValue, Value,
+};
+use minipb::{DecodingError, FieldId, ReadField, WireType};
 use std::convert::TryFrom;
 use std::fmt;
-use minipb::{ReadField, DecodingError, WireType, FieldId};
-use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, SlicedMatched, SlicedValue, Value};
-use minipb::gather_fields::ReaderGatheredFields;
 
 /// Takes an argument like `/a/b/c::type` to navigate a (an unsigned integer) as submessage, to
 /// navigate b as a submessage, pick field c, then convert to it to `type` or error. Return all
@@ -40,16 +42,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Input is read from stdin.",
                 myself);
             std::process::exit(1);
-        },
+        }
     };
 
     let stdin = std::io::stdin();
     let stdin = stdin.lock();
     let leaf_type = path.leaf_type().clone();
-    let matcher_fields = MatcherFields::new(
-        PathMatcher::new(
-            path.into_components(),
-            leaf_type.clone()));
+    let matcher_fields =
+        MatcherFields::new(PathMatcher::new(path.into_components(), leaf_type.clone()));
 
     let mut reader = ReaderGatheredFields::new(stdin, matcher_fields.as_sliced());
     let mut elements = 0;
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(matched @ SlicedMatched { tag: Tag::Leaf, .. }) => {
                 leaf_type.convert_to_stdout(matched.value)?;
                 elements += 1;
-            },
+            }
             Some(_) => {}
             None => break,
         }
@@ -78,7 +78,7 @@ enum LeafType {
     F64,
     F32,
     Bool,
-    Debug
+    Debug,
 }
 
 #[derive(Debug)]
@@ -103,27 +103,19 @@ impl LeafType {
                     print!("{:02x}", b);
                 }
                 println!();
-            },
-            (Str, SlicedValue::Slice(range, slice)) => {
-                match std::str::from_utf8(slice) {
-                    Ok(s) => println!("{}", s),
-                    Err(_) => return Err(ConversionError(Value::Slice(range), "invalid utf8")),
-                }
+            }
+            (Str, SlicedValue::Slice(range, slice)) => match std::str::from_utf8(slice) {
+                Ok(s) => println!("{}", s),
+                Err(_) => return Err(ConversionError(Value::Slice(range), "invalid utf8")),
             },
             (U64, Varint(x)) | (U64, Fixed64(x)) => println!("{}", x),
             (U64, Fixed32(x)) => println!("{}", x),
-            (I64, Varint(_x)) | (I64, Fixed64(_x)) => {
-                todo!("zigzag")
-            }
-            (F32, Fixed32(x)) => {
-                println!("{}", f32::from_bits(x))
-            },
-            (F64, Fixed64(x)) => {
-                println!("{}", f64::from_bits(x))
-            },
+            (I64, Varint(_x)) | (I64, Fixed64(_x)) => todo!("zigzag"),
+            (F32, Fixed32(x)) => println!("{}", f32::from_bits(x)),
+            (F64, Fixed64(x)) => println!("{}", f64::from_bits(x)),
             (Bool, Varint(x)) => println!("{}", x == 1),
             (Debug, value) => println!("{:?}", value),
-            _ => todo!()
+            _ => todo!(),
         }
 
         Ok(())
@@ -141,7 +133,7 @@ impl TryFrom<&'_ str> for LeafType {
             "double" => LeafType::F64,
             "float" => LeafType::F32,
             "any" => LeafType::Debug,
-            _ => return Err(())
+            _ => return Err(()),
         })
     }
 }
@@ -196,7 +188,8 @@ impl<'a> TryFrom<&'a str> for Path {
                     continue;
                 }
                 // this should only be an FieldId, no subscripts yet
-                let id = maybe_last.parse::<FieldId>()
+                let id = maybe_last
+                    .parse::<FieldId>()
                     .map_err(|_| PathParseError::InvalidField(maybe_last))?;
                 components.push(id);
             } else {
@@ -204,7 +197,8 @@ impl<'a> TryFrom<&'a str> for Path {
                 let mut split = maybe_last.split("::");
                 let last = split.next().expect("there is always the first element");
 
-                let last = last.parse::<FieldId>()
+                let last = last
+                    .parse::<FieldId>()
                     .map_err(|_| PathParseError::InvalidField(last))?;
 
                 let leaf_type = match split.next() {
@@ -233,7 +227,6 @@ struct PathMatcher {
     leaf_type: LeafType,
     /// Stacked ending offsets for the matched path elements
     position: Vec<usize>,
-
 }
 
 impl PathMatcher {
@@ -272,7 +265,9 @@ impl Matcher for PathMatcher {
         let decision = if depth == leaves {
             if read.field_id() == self.path[depth] {
                 match &self.leaf_type {
-                    Debug | Slice | Str if read.is_length_delimited() => Ok(Cont::ReadSlice(Tag::Leaf)),
+                    Debug | Slice | Str if read.is_length_delimited() => {
+                        Ok(Cont::ReadSlice(Tag::Leaf))
+                    }
                     _ if !read.is_length_delimited() => Ok(Cont::ReadValue(Tag::Leaf)),
                     _ => Err(Skip(Tag::UnexpectedLeafType(read.wire_type()))),
                 }
@@ -288,7 +283,7 @@ impl Matcher for PathMatcher {
                 } else {
                     Err(Skip(Tag::Ignored))
                 }
-            } else{
+            } else {
                 Err(Skip(Tag::Ignored))
             }
         };
@@ -301,13 +296,21 @@ impl Matcher for PathMatcher {
         match self.position.last() {
             Some(x) if *x == offset => {
                 self.position.pop();
-                (matches!(self.position.last(), Some(x) if *x == offset), Some(Tag::End))
-            },
+                (
+                    matches!(self.position.last(), Some(x) if *x == offset),
+                    Some(Tag::End),
+                )
+            }
             Some(x) => {
-                assert!(*x > offset, "got up to {} but should had stopped at {}", offset, x);
+                assert!(
+                    *x > offset,
+                    "got up to {} but should had stopped at {}",
+                    offset,
+                    x
+                );
                 (false, None)
-            },
-            None => (false, None)
+            }
+            None => (false, None),
         }
     }
 }

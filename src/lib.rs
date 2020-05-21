@@ -2,8 +2,8 @@ use std::convert::TryFrom;
 use std::fmt;
 
 pub mod field_reader;
-pub mod matcher_fields;
 pub mod gather_fields;
+pub mod matcher_fields;
 
 pub use gather_fields::Slicer;
 
@@ -148,7 +148,11 @@ impl fmt::Display for DecodingError {
             TooManyVarint32Bytes => write!(fmt, "too many bytes read for 32-bit varint"),
             TooManyVarint64Bytes => write!(fmt, "too many bytes read for 64-bit varint"),
             InvalidUtf8 => write!(fmt, "Invalid UTF8"),
-            FailedMatcherNesting(offset, limit) => write!(fmt, "nested field was read until {}, should had ended at {}", offset, limit),
+            FailedMatcherNesting(offset, limit) => write!(
+                fmt,
+                "nested field was read until {}, should had ended at {}",
+                offset, limit
+            ),
         }
     }
 }
@@ -159,7 +163,8 @@ impl std::error::Error for DecodingError {}
 // work but it'll take some iterations
 pub trait Reader<'a> {
     type Returned: 'a;
-    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<Self::Returned, Status>, DecodingError>;
+    fn next(&mut self, buf: &mut &'a [u8])
+        -> Result<Result<Self::Returned, Status>, DecodingError>;
 }
 
 /// Errors which can happen when reading from an std::io::Read.
