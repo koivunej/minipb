@@ -1,16 +1,16 @@
 use crate::gather_fields::{Gatherer, GatheredFields};
 use crate::matcher_fields::Matcher;
-use crate::{ReadError, Status};
+use crate::{ReadError, Status, Reader};
 
 /// A poor mans `std::io::BufRead` but with a growing buffer.
 // TODO: get this working with Reader<'a> trait
-pub struct ReaderGatheredFields<R, M: Matcher, G> {
+pub struct ReaderGatheredFields<IO, R> {
     /// The wrapped reader
-    reader: R,
+    inner: IO,
     /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
     buffer: Vec<u8>,
     /// Processes the bytes read into the buffer.
-    matcher: GatheredFields<M, G>,
+    matcher: R,
     /// The amount to grow the buffer by. It will need to be grown for larger fields, as there
     /// currently isn't a way to read fields as slices.
     grow_by: usize,
@@ -22,15 +22,15 @@ pub struct ReaderGatheredFields<R, M: Matcher, G> {
     eof_after_buffer: bool,
 }
 
-impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
-    where R: std::io::Read,
-          for<'a> G: Gatherer<'a, Tag = M::Tag>
+impl<'a, IO, R> ReaderGatheredFields<IO, R>
+    where IO: std::io::Read,
+          R: Reader<'a>
 {
-    pub fn new(reader: R, matcher: GatheredFields<M, G>) -> Self {
+    pub fn new(inner: IO, matcher: R) -> Self {
         let grow_by = 8192;
         Self {
+            inner,
             buffer: Vec::with_capacity(grow_by),
-            reader,
             matcher,
             grow_by,
             at_offset: 0,
@@ -39,26 +39,11 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
         }
     }
 
-    #[cfg(polonius)]
-    fn next(&mut self) -> Result<<G as Gatherer<'_>>::Returned, ReadError> {
-        loop {
-            self.maybe_fill()?;
-
-            // this would work out of the box with -Zpolonius
-            let mut buf = &self.buffer[..];
-            match self.matcher.next(&mut buf)? {
-                Ok(m) => return Ok(m),
-                Err(Status::IdleAtEndOfBuffer) => {},
-                Err(Status::NeedMoreBytes) => {},
-            }
-        }
-    }
-
     /// There might be Interrupted errors while reading, which are **not** ignored like the
     /// `std::io::BufRead` does for example. After the interruption the next can be called again
     /// only if the inner `std::io::Read` can continue reading where it was left off.
     #[cfg(not(polonius))]
-    pub fn next<'a>(&'a mut self) -> Result<Option<<G as Gatherer<'a>>::Returned>, ReadError> {
+    pub fn next(&'a mut self) -> Result<Option<R::Returned>, ReadError> {
         use std::mem::transmute;
         loop {
             self.maybe_fill()?;
@@ -131,7 +116,7 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
 
             self.buffer.extend(repeat(0).take(needed_zeroes));
 
-            let bytes = self.reader.read(&mut self.buffer[len_before..])?;
+            let bytes = self.inner.read(&mut self.buffer[len_before..])?;
 
             self.eof_after_buffer = bytes == 0;
             self.buffer.truncate(len_before + bytes);
@@ -139,7 +124,7 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
         Ok(())
     }
 
-    pub fn into_inner(self) -> R {
+    pub fn into_inner(self) -> IO {
         self.inner
     }
 }

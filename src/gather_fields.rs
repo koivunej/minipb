@@ -25,6 +25,7 @@ pub trait Gatherer<'a> {
 /// Slicer helps to map the bytes in the current buffer into the offset ranges of Value::Slice.
 pub struct Slicer<'a> {
     buffer: &'a [u8],
+    // what file offset the buffer[0] corresponds to
     first_offset: u64,
 }
 
@@ -84,7 +85,14 @@ impl<M: Matcher, G> GatheredFields<M, G>
         }
     }
 
-    pub fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<<G as Gatherer<'a>>::Returned, Status>, DecodingError> {
+}
+
+impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
+    where G: Gatherer<'a, Tag = M::Tag>
+{
+    type Returned = G::Returned;
+
+    fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<<G as Gatherer<'a>>::Returned, Status>, DecodingError> {
         let mut tmp = if let Some(min) = self.cached_min_offset {
             // this means that min is stored at buf[0] and buf[diff] is the next byte the inner
             // reader(s) need to look at

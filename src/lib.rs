@@ -157,7 +157,7 @@ impl std::error::Error for DecodingError {}
 
 // a single method trait would allow easy extension adapters, still not 100% convinced this *can't*
 // work but it'll take some iterations
-trait Reader<'a> {
+pub trait Reader<'a> {
     type Returned: 'a;
     fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<Self::Returned, Status>, DecodingError>;
 }
