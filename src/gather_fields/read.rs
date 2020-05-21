@@ -103,26 +103,45 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
     fn maybe_fill(&mut self) -> Result<(), ReadError> {
         use std::iter::repeat;
 
-        if self.exhausted || self.at_offset == self.buffer.len() {
-            self.buffer.drain(..self.at_offset);
-            self.at_offset = 0;
-
-            let len_before = self.buffer.len();
+        if self.exhausted {
+            let mut len_before = self.buffer.len();
+            print!("len before={}; ", len_before);
 
             let mut needed_zeroes = self.buffer.capacity() - len_before;
 
             if needed_zeroes == 0 {
-                // growing only after we are certain there's no other way might cause some
-                // reprocessing but might be the optimal strategy
-                needed_zeroes += self.grow_by;
+                if self.at_offset != 0 {
+                    print!("draining ..{}; ", self.at_offset);
+                    self.buffer.drain(..self.at_offset);
+                    self.at_offset = 0;
+                    len_before = self.buffer.len();
+                    print!("len before={}; ", len_before);
+                }
+
+                needed_zeroes = self.buffer.capacity() - len_before;
+
+                if needed_zeroes == 0 {
+                    // growing only after we are certain there's no other way might cause some
+                    // reprocessing but might be the optimal strategy, or silly either way
+                    needed_zeroes += self.grow_by;
+                }
             }
 
+            // only read one byte at a time
+            //needed_zeroes = needed_zeroes.min(8);
+
+            print!("needed_zeroes={}; ", needed_zeroes);
+
             self.buffer.extend(repeat(0).take(needed_zeroes));
+
+            print!("len_after={}; reading max {} over {}..; ", self.buffer.len(), self.buffer[len_before..].len(), len_before);
 
             let bytes = self.reader.read(&mut self.buffer[len_before..])?;
 
             self.eof_after_buffer = bytes == 0;
             self.buffer.truncate(len_before + bytes);
+
+            println!("read {}; len after={}", bytes, self.buffer.len());
         }
         Ok(())
     }
