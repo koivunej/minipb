@@ -3,6 +3,7 @@ use crate::matcher_fields::Matcher;
 use crate::{ReadError, Status};
 
 /// A poor mans `std::io::BufRead` but with a growing buffer.
+// TODO: get this working with Reader<'a> trait
 pub struct ReaderGatheredFields<R, M: Matcher, G> {
     /// The wrapped reader
     reader: R,
@@ -26,14 +27,13 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
           for<'a> G: Gatherer<'a, Tag = M::Tag>
 {
     pub fn new(reader: R, matcher: GatheredFields<M, G>) -> Self {
-        let grow_by = 64;
+        let grow_by = 8192;
         Self {
             buffer: Vec::with_capacity(grow_by),
             reader,
             matcher,
             grow_by,
             at_offset: 0,
-            // start with this false so that we dont grow on the first round
             exhausted: false,
             eof_after_buffer: false,
         }
@@ -87,6 +87,8 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
 
                 let buf_len = buf.len();
                 let consumed = original_len - buf_len;
+
+                // consumed can be zero, in case the gatherer would only need more buffer
                 self.at_offset += consumed;
 
                 match ret {
@@ -103,19 +105,16 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
     fn maybe_fill(&mut self) -> Result<(), ReadError> {
         use std::iter::repeat;
 
-        if self.exhausted {
+        if self.exhausted && !self.eof_after_buffer {
             let mut len_before = self.buffer.len();
-            print!("len before={}; ", len_before);
-
             let mut needed_zeroes = self.buffer.capacity() - len_before;
 
             if needed_zeroes == 0 {
                 if self.at_offset != 0 {
-                    print!("draining ..{}; ", self.at_offset);
+                    // these first bytes haven't been needed for a long time
                     self.buffer.drain(..self.at_offset);
                     self.at_offset = 0;
                     len_before = self.buffer.len();
-                    print!("len before={}; ", len_before);
                 }
 
                 needed_zeroes = self.buffer.capacity() - len_before;
@@ -127,22 +126,20 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
                 }
             }
 
-            // only read one byte at a time
+            // only read N bytes at a time
             //needed_zeroes = needed_zeroes.min(8);
 
-            print!("needed_zeroes={}; ", needed_zeroes);
-
             self.buffer.extend(repeat(0).take(needed_zeroes));
-
-            print!("len_after={}; reading max {} over {}..; ", self.buffer.len(), self.buffer[len_before..].len(), len_before);
 
             let bytes = self.reader.read(&mut self.buffer[len_before..])?;
 
             self.eof_after_buffer = bytes == 0;
             self.buffer.truncate(len_before + bytes);
-
-            println!("read {}; len after={}", bytes, self.buffer.len());
         }
         Ok(())
+    }
+
+    pub fn into_inner(self) -> R {
+        self.inner
     }
 }
