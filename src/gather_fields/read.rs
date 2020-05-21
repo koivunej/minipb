@@ -1,8 +1,8 @@
-use std::fmt;
 use crate::gather_fields::{Gatherer, GatheredFields};
-use crate::matcher_fields::{Matcher, MatcherFields, Matched};
+use crate::matcher_fields::Matcher;
 use crate::{ReadError, Status};
 
+/// A poor mans `std::io::BufRead` but with a growing buffer.
 pub struct ReaderGatheredFields<R, M: Matcher, G> {
     /// The wrapped reader
     reader: R,
@@ -54,6 +54,9 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
         }
     }
 
+    /// There might be Interrupted errors while reading, which are **not** ignored like the
+    /// `std::io::BufRead` does for example. After the interruption the next can be called again
+    /// only if the inner `std::io::Read` can continue reading where it was left off.
     #[cfg(not(polonius))]
     pub fn next<'a>(&'a mut self) -> Result<Option<<G as Gatherer<'a>>::Returned>, ReadError> {
         use std::mem::transmute;
@@ -61,7 +64,7 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
             self.maybe_fill()?;
 
             unsafe {
-                // We are trying to work around a compiler bugs which would otherwise grow the
+                // We are trying to work around a compiler "bug" which would otherwise grow the
                 // region of shared borrow of `buf` to whole function (NLL limitation). I think
                 // this is NLL problem #3 in Nikos polonius/NLL related blog posts and different
                 // variants of it have been reported and have the tag 'NLL-polonius'.
@@ -71,8 +74,8 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
                 // the "shorter" lifetime right before returning, it should have the same effect as
                 // using the `'a` the whole time.
                 //
-                // I am a bit worried of someone coming over and writing a Gatherer<'static>..
-                // Perhaps this could be done away with a bound limit on Gatherer?
+                // I am a bit worried of someone coming over and writing a Gatherer<'static>.. But
+                // not sure if that could fit here, wouldn't &'static mut self become an issue?
                 let mut buf = transmute::<&'_ _, &'static [u8]>(&self.buffer[self.at_offset..]);
 
                 // the matcher might advance this
@@ -93,7 +96,6 @@ impl<R, M: Matcher, G> ReaderGatheredFields<R, M, G>
                     Err(Status::IdleAtEndOfBuffer)
                     | Err(Status::NeedMoreBytes) => self.exhausted = true,
                 }
-
             }
         }
     }
