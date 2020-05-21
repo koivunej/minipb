@@ -85,5 +85,8 @@ kinds of wrappers which would allow you to consume what ever kind of
   * read prime bytes at a time?
 * [ ] benchmarks
 * [ ] separate the `no_std` core and or provide a feature?
+* [ ] get rid of unsafe when polonius hits the stable
+* [ ] quick-protobuf parser integration for matcher and gatherer generation!
+* [ ] world domination
 
 [protobuf is not good for large files or messages]: https://developers.google.com/protocol-buffers/docs/techniques#large-data
