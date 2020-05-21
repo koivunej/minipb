@@ -155,10 +155,47 @@ impl fmt::Display for DecodingError {
 
 impl std::error::Error for DecodingError {}
 
-// a single method trait would allow easy extension adapters
-pub trait Reader<'a> {
+// a single method trait would allow easy extension adapters, still not 100% convinced this *can't*
+// work but it'll take some iterations
+trait Reader<'a> {
     type Returned: 'a;
     fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<Self::Returned, Status>, DecodingError>;
+}
+
+/// Errors which can happen when reading from an std::io::Read.
+#[derive(Debug)]
+pub enum ReadError {
+    /// More bytes could not be read from the source but were expected
+    UnexpectedEndOfFile,
+    /// Decoding the input failed
+    Decoding(DecodingError),
+    /// An IO error occured
+    IO(std::io::Error),
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use ReadError::*;
+        match self {
+            UnexpectedEndOfFile => write!(fmt, "unexpected end of file"),
+            Decoding(e) => write!(fmt, "decoding failed: {}", e),
+            IO(e) => write!(fmt, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}
+
+impl From<DecodingError> for ReadError {
+    fn from(e: DecodingError) -> Self {
+        ReadError::Decoding(e)
+    }
+}
+
+impl From<std::io::Error> for ReadError {
+    fn from(e: std::io::Error) -> Self {
+        ReadError::IO(e)
+    }
 }
 
 /*

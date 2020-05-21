@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use minipb::matcher_fields::{Cont, Matcher, Skip, Matched, Value};
-use minipb::gather_fields::{GatheredFields, Slicer, Gatherer};
+use minipb::gather_fields::{GatheredFields, Slicer, Gatherer, ReaderGatheredFields};
 use minipb::{ReadField, Status, DecodingError, FieldId};
 
 struct HexOnly<'a>(&'a [u8]);
@@ -224,8 +224,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
         }
     }
 
-    let mut g = GatheredFields::new(MerkleDag::Top, PBLinkGatherer::default());
+    let g = GatheredFields::new(MerkleDag::Top, PBLinkGatherer::default());
+    let cursor = std::io::Cursor::new(&buffer);
 
+    let mut reader = ReaderGatheredFields::new(cursor, g);
+
+    loop {
+        match reader.next() {
+            Ok(Some(link)) => println!("{:?}", link),
+            Ok(None) => break,
+            Err(e) => panic!("{}", e),
+        }
+    }
+
+    /*
     let mut copies = Vec::new();
     let mut offset = 0;
     copies.extend(&buffer[..64]);
@@ -261,6 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
             }
         }
     }
+    */
 
     /*
     let mut links = Links::new();

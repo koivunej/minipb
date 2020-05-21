@@ -3,6 +3,9 @@ use std::ops::Range;
 use crate::{DecodingError, Status};
 use crate::matcher_fields::{Matcher, MatcherFields, Matched};
 
+mod read;
+pub use read::ReaderGatheredFields;
+
 /// Gathers multiple tagged values into single returned value. This is needed because the fields in
 /// protobuf files can come at any order, and previous values can be overridden by later fields.
 pub trait Gatherer<'a> {
@@ -70,9 +73,8 @@ pub struct GatheredFields<M: Matcher, G> {
     cached_min_offset: Option<u64>,
 }
 
-impl<'a, M: Matcher, G> GatheredFields<M, G>
-    where G: Gatherer<'a, Tag = M::Tag>,
-          G::Returned: fmt::Debug
+impl<M: Matcher, G> GatheredFields<M, G>
+    where for<'a> G: Gatherer<'a, Tag = M::Tag>
 {
     pub fn new(matcher: M, gatherer: G) -> Self {
         Self {
@@ -82,7 +84,7 @@ impl<'a, M: Matcher, G> GatheredFields<M, G>
         }
     }
 
-    pub fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<G::Returned, Status>, DecodingError> {
+    pub fn next<'a>(&mut self, buf: &mut &'a [u8]) -> Result<Result<<G as Gatherer<'a>>::Returned, Status>, DecodingError> {
         let mut tmp = if let Some(min) = self.cached_min_offset {
             // this means that min is stored at buf[0] and buf[diff] is the next byte the inner
             // reader(s) need to look at

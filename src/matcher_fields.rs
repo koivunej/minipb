@@ -1,12 +1,11 @@
 use crate::field_reader::FieldReader;
 use crate::{DecodingError, FieldValue, ReadField, Status, Slicer};
 use std::ops::Range;
-use std::fmt;
 
 /// State machine one needs to write in order to know how to handle nested fields.
 pub trait Matcher {
     /// Tag describing to caller how to process the field
-    type Tag: fmt::Debug;
+    type Tag;
 
     /// Advance the matcher on a new field read.
     ///
@@ -222,6 +221,7 @@ impl<M: Matcher> MatcherFields<M> {
         (self.offset, self.matcher)
     }
 
+    /// Needs to be called with the buffer before the previous call to next has advanced it.
     pub fn slicer<'a>(&'a self, buf: &'a [u8]) -> Slicer<'a> {
         Slicer::wrap(buf, self.offset)
     }
