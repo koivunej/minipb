@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use minipb::gather_fields::ReaderGatheredFields;
+use minipb::io_ext::read::ReadWrapper;
 use minipb::matcher_fields::{
     Cont, Matcher, MatcherFields, Skip, SlicedMatched, SlicedValue, Value,
 };
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matcher_fields =
         MatcherFields::new(PathMatcher::new(path.into_components(), leaf_type.clone()));
 
-    let mut reader = ReaderGatheredFields::new(stdin, matcher_fields.into_sliced());
+    let mut reader = ReadWrapper::new(stdin, matcher_fields.into_sliced());
     let mut elements = 0;
 
     loop {

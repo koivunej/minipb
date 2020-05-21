@@ -2,9 +2,6 @@ use crate::matcher_fields::{Matched, Matcher, MatcherFields};
 use crate::{DecodingError, Status};
 use std::ops::Range;
 
-mod read;
-pub use read::ReaderGatheredFields;
-
 /// Gathers multiple tagged values into single returned value. This is needed because the fields in
 /// protobuf files can come at any order, and previous values can be overridden by later fields.
 pub trait Gatherer<'a> {

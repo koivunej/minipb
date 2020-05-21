@@ -77,7 +77,7 @@ kinds of wrappers which would allow you to consume what ever kind of
 
 * [x] get `std::io::Read` support working
 * [x] major cleanup
-* [ ] move the `minipb::gather_fields::read` into more suitable place
+* [x] move the `minipb::gather_fields::read` into more suitable place
 * [ ] explore ringbuffer support
 * [ ] read a field as bytes without buffering it at once
   * this shouldn't be hard to implement, not sure how useful it would be though

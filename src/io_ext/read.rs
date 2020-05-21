@@ -1,8 +1,7 @@
 use crate::{ReadError, Reader, Status};
 
 /// A poor mans `std::io::BufRead` but with a growing buffer.
-// TODO: get this working with Reader<'a> trait
-pub struct ReaderGatheredFields<IO, R> {
+pub struct ReadWrapper<IO, R> {
     /// The wrapped reader
     inner: IO,
     /// Growable byte buffer. Growth happens by `grow_by` amount at a time.
@@ -20,7 +19,7 @@ pub struct ReaderGatheredFields<IO, R> {
     eof_after_buffer: bool,
 }
 
-impl<'a, IO, R> ReaderGatheredFields<IO, R>
+impl<'a, IO, R> ReadWrapper<IO, R>
 where
     IO: std::io::Read,
     R: Reader<'a>,

@@ -5,6 +5,8 @@ pub mod field_reader;
 pub mod gather_fields;
 pub mod matcher_fields;
 
+pub mod io_ext;
+
 pub use gather_fields::Slicer;
 
 pub(crate) mod pb;

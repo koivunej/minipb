@@ -4,7 +4,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
 
-use minipb::gather_fields::{GatheredFields, Gatherer, ReaderGatheredFields, Slicer};
+use minipb::gather_fields::{GatheredFields, Gatherer, Slicer};
+use minipb::io_ext::read::ReadWrapper;
 use minipb::matcher_fields::{Cont, Matched, Matcher, Skip, Value};
 use minipb::{DecodingError, FieldId, ReadField};
 
@@ -22,7 +23,7 @@ impl<'a> fmt::Debug for HexOnly<'a> {
 fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let stdin = std::io::stdin();
     let gatherer = GatheredFields::new(MerkleDag::Top, PBLinkGatherer::default());
-    let mut reader = ReaderGatheredFields::new(stdin.lock(), gatherer);
+    let mut reader = ReadWrapper::new(stdin.lock(), gatherer);
 
     loop {
         match reader.read_next()? {
