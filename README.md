@@ -47,6 +47,11 @@ The `MatcherFields`, and it's sibling `SlicedMatcherFields`, and
 `GathererFields` implement the `minipb::Reader` abstraction which might work to
 support actual byte sources such as `std::io::Read`.
 
+## User visible conventions
+
+ * `u64` is a file (or input) offset
+ * `usize` is used when the user could have to slice something up
+
 ## Implementation
 
 There are no tests yet, but examples contains a semi-useful `extractor` which
@@ -70,11 +75,13 @@ kinds of wrappers which would allow you to consume what ever kind of
 
 ## TODO
 
- * [x] get `std::io::Read` support working
- * [ ] move the `minipb::gather_fields::read` into more suitable place
- * [ ] explore ringbuffer support
- * [ ] tests
- * [ ] benchmarks
- * [ ] separate the `no_std` core and or provide a feature?
+* [x] get `std::io::Read` support working
+* [x] major cleanup
+* [ ] move the `minipb::gather_fields::read` into more suitable place
+* [ ] explore ringbuffer support
+* [ ] tests
+  * read prime bytes at a time?
+* [ ] benchmarks
+* [ ] separate the `no_std` core and or provide a feature?
 
 [protobuf is not good for large files or messages]: https://developers.google.com/protocol-buffers/docs/techniques#large-data
