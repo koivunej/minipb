@@ -1,5 +1,3 @@
-use crate::gather_fields::{Gatherer, GatheredFields};
-use crate::matcher_fields::Matcher;
 use crate::{ReadError, Status, Reader};
 
 /// A poor mans `std::io::BufRead` but with a growing buffer.

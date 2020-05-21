@@ -2,16 +2,15 @@
 
 use std::convert::TryFrom;
 use std::fmt;
-use minipb::{ReadField, DecodingError, WireType, FieldId, Status, ReadError, Reader};
+use minipb::{ReadField, DecodingError, WireType, FieldId};
 use minipb::matcher_fields::{MatcherFields, Matcher, Cont, Skip, SlicedMatched, SlicedValue, Value};
-use minipb::gather_fields::{Slicer, ReaderGatheredFields};
+use minipb::gather_fields::ReaderGatheredFields;
 
 /// Takes an argument like `/a/b/c::type` to navigate a (an unsigned integer) as submessage, to
 /// navigate b as a submessage, pick field c, then convert to it to `type` or error. Return all
 /// matches, separated by environment variable $LFS.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::env::args;
-    use std::io::Read;
 
     let mut args = args();
     let myself = args.next().expect("zeroeth argument must be present");

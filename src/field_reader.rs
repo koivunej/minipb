@@ -16,6 +16,7 @@ impl FieldReader {
         &'a mut self,
         data: &[u8],
     ) -> Result<Result<ReadField<'a>, Status>, DecodingError> {
+        // TODO: this needs to work on Bytes, or two slices to support ring buffers
         macro_rules! launder {
             ($x:expr) => {
                 match $x {

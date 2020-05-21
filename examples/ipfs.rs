@@ -1,7 +1,6 @@
 #![warn(rust_2018_idioms)]
 
 use std::fmt;
-use std::io::Read;
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -124,7 +123,6 @@ impl Matcher for MerkleDag {
 
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>) {
         use MerkleDag::*;
-        // println!("decide_at({:?}, {})", self, offset);
         match self {
             Link { until } if offset == *until => {
                 *self = Top;
@@ -209,7 +207,6 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
                 return Ok(None)
             },
             Matched { tag: _tag, offset: _offset, value: _value } => {
-                // println!("skipped {:?} {:?} at {}", _tag, _value, _offset);
                 return Ok(None)
             }
         };

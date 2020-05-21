@@ -1,4 +1,3 @@
-use std::fmt;
 use std::ops::Range;
 use crate::{DecodingError, Status};
 use crate::matcher_fields::{Matcher, MatcherFields, Matched};
@@ -31,7 +30,6 @@ pub struct Slicer<'a> {
 
 impl<'a> Slicer<'a> {
     pub(crate) fn wrap(buffer: &'a [u8], last_offset: u64) -> Self {
-        // println!("{:?} = {} - {}", last_offset.saturating_sub(buffer.len() as u64), last_offset, buffer.len());
         let first_offset = last_offset.saturating_sub(buffer.len() as u64);
         Self {
             buffer,
@@ -40,28 +38,12 @@ impl<'a> Slicer<'a> {
     }
 
     pub fn as_slice(&self, range: &Range<u64>) -> &'a [u8] {
-        // println!("adjusted_range = ({} - {})..({} - {})", range.start, self.first_offset, range.end, self.first_offset);
         let start = (range.start - self.first_offset) as usize;
         let end = (range.end - self.first_offset) as usize;
         let adjusted_range = start..end;
         assert_eq!(range.end - range.start, (adjusted_range.end - adjusted_range.start) as u64);
-        let ret = &self.buffer[adjusted_range];
 
-        /*
-        print!("buffer: ");
-        for b in self.buffer {
-            print!("{:02x}", b);
-        }
-        println!();
-
-        print!("sliced: {:indent$}", "", indent = start * 2);
-        for b in ret {
-            print!("{:02x}", b);
-        }
-        println!();
-        */
-
-        ret
+        &self.buffer[adjusted_range]
     }
 }
 
@@ -84,7 +66,6 @@ impl<M: Matcher, G> GatheredFields<M, G>
             cached_min_offset: None
         }
     }
-
 }
 
 impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
@@ -106,12 +87,10 @@ impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
             let ret = match self.reader.next(&mut tmp)? {
                 Ok(m) => {
                     // FIXME: it's easy to not notice that tmp is passed to inner instead of buf
-                    // and even that is wrong in the case of reading more than 1 byte at a time!
+                    // and even that was wrong in the case of reading more than 1 byte at a time!
 
                     let end = buf.len() - tmp.len();
                     let sliced_from = &buf[..end];
-
-                    // println!("{:02x?}", sliced_from);
 
                     let slicer = Slicer::wrap(sliced_from, self.reader.offset());
                     let ret = self.gatherer.update(m, slicer)?.map(|r| Ok(Ok(r)));
@@ -123,12 +102,11 @@ impl<'a, M: Matcher, G> crate::Reader<'a> for GatheredFields<M, G>
             };
 
             if let Some(ret) = ret {
-                // FIXME: check if the min changed, update needed
-                if self.cached_min_offset.is_none() {
-                    self.cached_min_offset = self.gatherer.min_offset();
-                }
+                self.cached_min_offset = self.gatherer.min_offset();
 
                 if self.cached_min_offset.is_none() {
+                    // advance to wherever the self.reader advanced to; we will not be using the
+                    // consumed bytes
                     *buf = tmp;
                 }
 
