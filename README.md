@@ -81,9 +81,11 @@ kinds of wrappers which would allow you to consume what ever kind of
 * [ ] explore ringbuffer support
 * [ ] read a field as bytes without buffering it at once
   * this shouldn't be hard to implement, not sure how useful it would be though
+* [ ] packed repeated fields
 * [ ] tests
   * read prime bytes at a time?
 * [ ] benchmarks
+  * maybe using OSM data ([format](https://wiki.openstreetmap.org/wiki/PBF_Format))?
 * [ ] separate the `no_std` core and or provide a feature?
 * [ ] get rid of unsafe when polonius hits the stable
 * [ ] quick-protobuf parser integration for matcher and gatherer generation!
