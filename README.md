@@ -89,4 +89,8 @@ kinds of wrappers which would allow you to consume what ever kind of
 * [ ] quick-protobuf parser integration for matcher and gatherer generation!
 * [ ] world domination
 
+# License and legal
+
+Not yet decided. This has been a side project of mine at [Equilibrium](https://github.com/eqlabs).
+
 [protobuf is not good for large files or messages]: https://developers.google.com/protocol-buffers/docs/techniques#large-data
