@@ -72,14 +72,18 @@ impl FieldReader {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Seek, SeekFrom};
-    use crate::{FieldValue, Status};
     use super::FieldReader;
+    use crate::{FieldValue, Status};
+    use std::io::{Cursor, Seek, SeekFrom};
 
     #[test]
     fn read_basic_fields() {
         let expected = &[
-            (FieldValue::Varint(42), 2 /* bytes consumed */, 0 /* field len */),
+            (
+                FieldValue::Varint(42),
+                2, /* bytes consumed */
+                0, /* field len */
+            ),
             (FieldValue::Varint(242), 3, 0),
             (FieldValue::Varint(22242), 4, 0),
             (FieldValue::Varint(2097153), 5, 0),
@@ -93,15 +97,18 @@ mod tests {
             (FieldValue::DataLength(1), 2, 1),
             (FieldValue::DataLength(242), 3, 242),
             (FieldValue::DataLength(22242), 4, 22242),
-            (FieldValue::DataLength(u32::max_value()), 6, u32::max_value() as usize),
+            (
+                FieldValue::DataLength(u32::max_value()),
+                6,
+                u32::max_value() as usize,
+            ),
             // longer fields are not supported
         ];
 
         let mut buffer = Vec::new();
 
         for (field, expected_consumed, expected_field_len) in expected {
-
-            let mut cursor = std::io::Cursor::new(&mut buffer);
+            let mut cursor = Cursor::new(&mut buffer);
             field.output_with_field_id(1, &mut cursor).unwrap();
 
             cursor.seek(SeekFrom::Start(0)).unwrap();
@@ -116,7 +123,6 @@ mod tests {
             // select non-empty slices but incomplete starting from the beginning to make sure that
             // all those report back NeedMoreBytes
             for end_byte in 1..(buffer.len() - 1) {
-
                 let need_more = fr.next(&buffer[..end_byte]).unwrap().unwrap_err();
                 assert!(matches!(need_more, Status::NeedMoreBytes));
             }

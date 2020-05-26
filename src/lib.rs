@@ -113,8 +113,11 @@ enum FieldValue {
 
 #[cfg(test)]
 impl FieldValue {
-    fn output_with_field_id(&self, id: FieldId, mut writer: impl std::io::Write) -> std::io::Result<usize> {
-        use std::io::Write;
+    fn output_with_field_id(
+        &self,
+        id: FieldId,
+        mut writer: impl std::io::Write,
+    ) -> std::io::Result<usize> {
         use either::Either;
         use stackvector::StackVec;
         use FieldValue::*;
@@ -139,11 +142,11 @@ impl FieldValue {
             Fixed64(x) => {
                 tmp.extend_from_slice(&x.to_le_bytes());
                 Either::Right(tmp.into_iter())
-            },
+            }
             Fixed32(x) => {
                 tmp.extend_from_slice(&x.to_le_bytes());
                 Either::Right(tmp.into_iter())
-            },
+            }
             DataLength(x) => Either::Left(varint_bytes(*x as u64)),
         };
 
@@ -173,13 +176,15 @@ fn varint_bytes(varint: u64) -> impl Iterator<Item = u8> {
         }
     });
 
-    bytes.map(|(remainder, byte)| {
-        if remainder != 0 {
-            byte | 0x80
-        } else {
-            byte
-        }
-    })
+    bytes.map(
+        |(remainder, byte)| {
+            if remainder != 0 {
+                byte | 0x80
+            } else {
+                byte
+            }
+        },
+    )
 }
 
 #[test]
