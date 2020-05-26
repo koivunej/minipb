@@ -1,2 +1,2 @@
-status = ["Continuous integration"]
+status = ["Check", "Test Suite"]
 delete_merged_branches = true
