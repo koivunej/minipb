@@ -175,6 +175,7 @@ impl<M: Matcher> MatcherFields<M> {
                     value: Value::Slice(start..self.offset),
                 };
 
+                // FIXME: this is extra since we already replaced with this value
                 self.state = State::DecidingAfter;
 
                 Ok(Ok(Some(ret)))
