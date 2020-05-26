@@ -111,6 +111,83 @@ enum FieldValue {
     DataLength(u32),
 }
 
+#[cfg(test)]
+impl FieldValue {
+    fn output_with_field_id(&self, id: FieldId, mut writer: impl std::io::Write) -> std::io::Result<usize> {
+        use std::io::Write;
+        use either::Either;
+        use stackvector::StackVec;
+        use FieldValue::*;
+
+        // sorry, this is some maniac code right here. wanted to try this out
+
+        let lowest_bits = match self {
+            Varint(_) => 0,
+            Fixed64(_) => 1,
+            DataLength(_) => 2,
+            Fixed32(_) => 5,
+        };
+
+        let id = (id << 3) | lowest_bits;
+
+        let field_bytes = varint_bytes(id as u64);
+
+        let mut tmp = StackVec::<[u8; 8]>::new();
+
+        let payload = match self {
+            Varint(x) => Either::Left(varint_bytes(*x)),
+            Fixed64(x) => {
+                tmp.extend_from_slice(&x.to_le_bytes());
+                Either::Right(tmp.into_iter())
+            },
+            Fixed32(x) => {
+                tmp.extend_from_slice(&x.to_le_bytes());
+                Either::Right(tmp.into_iter())
+            },
+            DataLength(x) => Either::Left(varint_bytes(*x as u64)),
+        };
+
+        let mut count = 0;
+
+        // also sorry the boring end, writing it byte by byte.
+
+        for byte in field_bytes.chain(payload) {
+            writer.write_all(&[byte])?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+}
+
+#[cfg(test)]
+fn varint_bytes(varint: u64) -> impl Iterator<Item = u8> {
+    use std::iter::successors;
+    let first = Some((varint >> 7, (varint & 0x7f) as u8));
+
+    let bytes = successors(first, |&(remainder, _): &(u64, _)| {
+        if remainder == 0 {
+            None
+        } else {
+            Some((remainder >> 7, (remainder & 0x7f) as u8))
+        }
+    });
+
+    bytes.map(|(remainder, byte)| {
+        if remainder != 0 {
+            byte | 0x80
+        } else {
+            byte
+        }
+    })
+}
+
+#[test]
+fn test_varint_bytes() {
+    assert_eq!(&varint_bytes(227).collect::<Vec<_>>(), &[0xe3, 0x01]);
+    assert_eq!(&varint_bytes(242).collect::<Vec<_>>(), &[0xf2, 0x01]);
+}
+
 /// All of the bytes still remaining in the buffer need to be kept, but more bytes should be read.
 #[derive(Debug)]
 pub struct NeedMoreBytes;

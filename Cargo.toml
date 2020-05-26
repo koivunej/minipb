@@ -8,4 +8,6 @@ edition = "2018"
 
 [dev-dependencies]
 trybuild = "1.0"
+stackvector = "1.0.8"
+either = "1.5.3"
 #quick-protobuf = "0.6.4"
