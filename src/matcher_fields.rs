@@ -92,6 +92,7 @@ impl<M: Matcher> MatcherFields<M> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn advance<'a>(
         &mut self,
         buf: &mut &'a [u8],
@@ -255,6 +256,7 @@ impl<M: Matcher> MatcherFields<M> {
 impl<'a, M: Matcher> crate::Reader<'a> for MatcherFields<M> {
     type Returned = Matched<M::Tag>;
 
+    #[allow(clippy::type_complexity)]
     fn next(
         &mut self,
         buf: &mut &'a [u8],
