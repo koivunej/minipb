@@ -74,7 +74,7 @@ impl FieldReader {
 mod tests {
     use super::FieldReader;
     use crate::{FieldValue, Status};
-    use std::io::{Cursor, Seek, SeekFrom};
+    use std::io::Cursor;
 
     #[test]
     fn read_basic_fields() {
@@ -103,8 +103,6 @@ mod tests {
         for (field, expected_consumed, expected_field_len) in expected {
             let mut cursor = Cursor::new(&mut buffer);
             field.output_with_field_id(1, &mut cursor).unwrap();
-
-            cursor.seek(SeekFrom::Start(0)).unwrap();
 
             let mut fr = FieldReader::default();
 
