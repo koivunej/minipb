@@ -99,20 +99,20 @@ where
             let mut needed_zeroes = self.buffer.capacity() - len_before;
 
             if needed_zeroes == 0 {
-                if self.at_offset != 0 {
-                    // these first bytes haven't been needed for a long time
-                    self.buffer.drain(..self.at_offset);
-                    self.at_offset = 0;
-                    len_before = self.buffer.len();
-                }
+                // we are at capacity; try draining any unused bytes if that'd help
+                //
+                // these first bytes haven't been needed for a long time.
+                self.buffer.drain(..self.at_offset);
+                self.at_offset = 0;
+                len_before = self.buffer.len();
 
                 needed_zeroes = self.buffer.capacity() - len_before;
+            }
 
-                if needed_zeroes == 0 {
-                    // growing only after we are certain there's no other way might cause some
-                    // reprocessing but might be the optimal strategy, or silly either way
-                    needed_zeroes += self.grow_by;
-                }
+            if needed_zeroes == 0 {
+                // growing only after we are certain there's no other way might cause some
+                // reprocessing but might be the optimal strategy, or silly either way
+                needed_zeroes += self.grow_by;
             }
 
             // only read N bytes at a time
