@@ -15,7 +15,7 @@ pub trait Matcher {
         &mut self,
         offset: usize,
         read: &ReadField<'_>,
-    ) -> Result<Result<Cont<Self::Tag>, Skip<Self::Tag>>, DecodingError>;
+    ) -> Result<Action<Self::Tag>, DecodingError>;
 
     /// Advance the matcher after a field has been processed. Depending on the return value this
     /// can be called many times in order for the Matcher ot highligh which objects have ended at
@@ -24,6 +24,29 @@ pub trait Matcher {
     /// Return `(true, _)` if this method needs to be called again on the same offset, `(false, _)`
     /// otherwise.
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>);
+}
+
+/// The action to take, with a tag.
+#[derive(Debug)]
+pub enum Action<T> {
+    /// Continue reading the field.
+    Continue(Cont<T>),
+    /// Represents an instruction to skip the current field. Good default.
+    Skip(T),
+}
+
+/// Instruction to process the field as follows, with the given tag.
+#[derive(Debug)]
+pub enum Cont<T> {
+    /// Start processing the field as a nested message. Outputs the given tag to mark this.
+    Message(Option<T>),
+    /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
+    /// amount available. This will require the caller to buffer this much data.
+    ReadSlice(T),
+    // FIXME: here could be a ReadPartialSlice to stream bytes when they arrive, that will require
+    // though cloneable tags, which wouldn't be a huge deal.
+    /// Process the field as non-length delimited field with the given tag.
+    ReadValue(T),
 }
 
 /// Uses an [`Matcher`] to match tagged fields from a [`FieldReader`].
@@ -87,12 +110,14 @@ impl<M: Matcher> MatcherFields<M> {
                     let decision = self.matcher.decide_before(read_at as usize, &read)?;
 
                     let ret = match decision {
-                        Ok(Cont::Message(maybe_tag)) => maybe_tag.map(|tag| Matched {
-                            tag,
-                            offset: read_at,
-                            value: Value::Marker,
-                        }),
-                        Ok(Cont::ReadValue(tag)) => {
+                        Action::Continue(Cont::Message(maybe_tag)) => {
+                            maybe_tag.map(|tag| Matched {
+                                tag,
+                                offset: read_at,
+                                value: Value::Marker,
+                            })
+                        }
+                        Action::Continue(Cont::ReadValue(tag)) => {
                             // why isn't this a move? because FieldReader owns the FieldInfo
                             let value = match &read.field.value {
                                 FieldValue::Varint(x) => Value::Varint(*x),
@@ -107,7 +132,7 @@ impl<M: Matcher> MatcherFields<M> {
                                 value,
                             })
                         }
-                        Ok(Cont::ReadSlice(tag)) => {
+                        Action::Continue(Cont::ReadSlice(tag)) => {
                             self.state = State::Buffering(
                                 tag,
                                 read_at,
@@ -116,7 +141,7 @@ impl<M: Matcher> MatcherFields<M> {
                             );
                             return Ok(Ok(None));
                         }
-                        Err(Skip(tag)) => {
+                        Action::Skip(tag) => {
                             let total = read.field_len();
                             self.state = State::Skipping(tag, read_at, self.offset, total as u64);
                             return Ok(Ok(None));
@@ -351,20 +376,6 @@ impl From<SlicedValue<'_>> for Value {
     }
 }
 
-/// Instruction to process the field as follows, with the given tag.
-#[derive(Debug)]
-pub enum Cont<T> {
-    /// Start processing the field as a nested message. Outputs the given tag to mark this.
-    Message(Option<T>),
-    /// Process the field as an opaque slice. Bytes will be buffered until there's at least this
-    /// amount available. This will require the caller to buffer this much data.
-    ReadSlice(T),
-    // FIXME: here could be a ReadPartialSlice to stream bytes when they arrive, that will require
-    // though cloneable tags, which wouldn't be a huge deal.
-    /// Process the field as non-length delimited field with the given tag.
-    ReadValue(T),
-}
-
 impl Value {
     pub fn slice_len(&self) -> Result<usize, ()> {
         match self {
@@ -373,7 +384,3 @@ impl Value {
         }
     }
 }
-
-/// Represents an instruction to skip the current field. Good default.
-#[derive(Debug)]
-pub struct Skip<T>(pub T);

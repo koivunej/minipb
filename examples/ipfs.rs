@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use minipb::gather_fields::{GatheredFields, Gatherer, Slicer};
 use minipb::io_ext::read::ReadWrapper;
-use minipb::matcher_fields::{Cont, Matched, Matcher, Skip, Value};
+use minipb::matcher_fields::{Action, Cont, Matched, Matcher, Value};
 use minipb::{DecodingError, FieldId, ReadField};
 
 struct HexOnly<'a>(&'a [u8]);
@@ -75,7 +75,7 @@ impl Matcher for MerkleDag {
         &mut self,
         offset: usize,
         read: &ReadField<'_>,
-    ) -> Result<Result<Cont<Self::Tag>, Skip<Self::Tag>>, DecodingError> {
+    ) -> Result<Action<Self::Tag>, DecodingError> {
         use MerkleDag::*;
         //println!("decide({:?}, {}, {:?})", self, offset, read);
         match self {
@@ -83,13 +83,17 @@ impl Matcher for MerkleDag {
                 *self = UserBytes {
                     until: offset + read.bytes_to_skip(),
                 };
-                return Ok(Ok(Cont::Message(Some(DagPbElement::StartUserBytes))));
+                return Ok(Action::Continue(Cont::Message(Some(
+                    DagPbElement::StartUserBytes,
+                ))));
             }
             Top if read.field_id() == 2 => {
                 *self = Link {
                     until: offset + read.bytes_to_skip(),
                 };
-                return Ok(Ok(Cont::Message(Some(DagPbElement::StartPbLink))));
+                return Ok(Action::Continue(Cont::Message(Some(
+                    DagPbElement::StartPbLink,
+                ))));
             }
             Top => {}
             Link { until } => {
@@ -98,10 +102,10 @@ impl Matcher for MerkleDag {
                 }
 
                 return Ok(match read.field_id() {
-                    1 => Ok(Cont::ReadSlice(DagPbElement::PbLinkHash)),
-                    2 => Ok(Cont::ReadSlice(DagPbElement::PbLinkName)),
-                    3 => Ok(Cont::ReadValue(DagPbElement::PbLinkTotalSize)),
-                    x => Err(Skip(DagPbElement::PbLinkExtraField(x))),
+                    1 => Action::Continue(Cont::ReadSlice(DagPbElement::PbLinkHash)),
+                    2 => Action::Continue(Cont::ReadSlice(DagPbElement::PbLinkName)),
+                    3 => Action::Continue(Cont::ReadValue(DagPbElement::PbLinkTotalSize)),
+                    x => Action::Skip(DagPbElement::PbLinkExtraField(x)),
                 });
             }
             UserBytes { until } => {
@@ -110,16 +114,16 @@ impl Matcher for MerkleDag {
                 }
 
                 return Ok(match read.field_id() {
-                    1 => Ok(Cont::ReadValue(DagPbElement::UnixFsType)),
-                    2 => Ok(Cont::ReadSlice(DagPbElement::UnixFsData)),
-                    3 => Ok(Cont::ReadValue(DagPbElement::UnixFsFileSize)),
-                    4 => Ok(Cont::ReadValue(DagPbElement::UnixFsBlockSize)),
-                    x => Err(Skip(DagPbElement::UnixFsField(x))),
+                    1 => Action::Continue(Cont::ReadValue(DagPbElement::UnixFsType)),
+                    2 => Action::Continue(Cont::ReadSlice(DagPbElement::UnixFsData)),
+                    3 => Action::Continue(Cont::ReadValue(DagPbElement::UnixFsFileSize)),
+                    4 => Action::Continue(Cont::ReadValue(DagPbElement::UnixFsBlockSize)),
+                    x => Action::Skip(DagPbElement::UnixFsField(x)),
                 });
             }
         }
 
-        Ok(Err(Skip(DagPbElement::TopExtraField(read.field_id()))))
+        Ok(Action::Skip(DagPbElement::TopExtraField(read.field_id())))
     }
 
     fn decide_after(&mut self, offset: usize) -> (bool, Option<Self::Tag>) {

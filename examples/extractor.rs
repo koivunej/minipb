@@ -2,7 +2,7 @@
 
 use minipb::io_ext::read::ReadWrapper;
 use minipb::matcher_fields::{
-    Cont, Matcher, MatcherFields, Skip, SlicedMatched, SlicedValue, Value,
+    Action, Cont, Matcher, MatcherFields, SlicedMatched, SlicedValue, Value,
 };
 use minipb::{DecodingError, FieldId, ReadField, WireType};
 use std::convert::TryFrom;
@@ -256,7 +256,7 @@ impl Matcher for PathMatcher {
         &mut self,
         offset: usize,
         read: &ReadField<'_>,
-    ) -> Result<Result<Cont<Tag>, Skip<Tag>>, DecodingError> {
+    ) -> Result<Action<Tag>, DecodingError> {
         use LeafType::*;
 
         let depth = self.position.len();
@@ -266,25 +266,27 @@ impl Matcher for PathMatcher {
             if read.field_id() == self.path[depth] {
                 match &self.leaf_type {
                     Debug | Slice | Str if read.is_length_delimited() => {
-                        Ok(Cont::ReadSlice(Tag::Leaf))
+                        Action::Continue(Cont::ReadSlice(Tag::Leaf))
                     }
-                    _ if !read.is_length_delimited() => Ok(Cont::ReadValue(Tag::Leaf)),
-                    _ => Err(Skip(Tag::UnexpectedLeafType(read.wire_type()))),
+                    _ if !read.is_length_delimited() => {
+                        Action::Continue(Cont::ReadValue(Tag::Leaf))
+                    }
+                    _ => Action::Skip(Tag::UnexpectedLeafType(read.wire_type())),
                 }
             } else {
-                Err(Skip(Tag::Ignored))
+                Action::Skip(Tag::Ignored)
             }
         } else {
             if read.field_id() == self.path[depth] {
                 if read.field_len() > 0 {
                     // FIXME: this offset + bytes_to_skip needs to be easier to handle
                     self.position.push(offset + read.bytes_to_skip());
-                    Ok(Cont::Message(Some(Tag::Start)))
+                    Action::Continue(Cont::Message(Some(Tag::Start)))
                 } else {
-                    Err(Skip(Tag::Ignored))
+                    Action::Skip(Tag::Ignored)
                 }
             } else {
-                Err(Skip(Tag::Ignored))
+                Action::Skip(Tag::Ignored)
             }
         };
 
