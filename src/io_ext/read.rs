@@ -69,9 +69,7 @@ where
                 // the matcher might advance this
                 let original_len = buf.len();
 
-                // FIXME: there's probably a bug here when the buf does get moved but we don't move
-                // the internal accounting?
-                let ret = self.matcher.next(&mut buf)?;
+                let ret = self.matcher.next(&mut buf);
 
                 let buf_len = buf.len();
                 let consumed = original_len - buf_len;
@@ -79,7 +77,7 @@ where
                 // consumed can be zero, in case the gatherer would only need more buffer
                 self.at_offset += consumed;
 
-                match ret {
+                match ret? {
                     Ok(m) => return Ok(Some(m)),
                     Err(Status::IdleAtEndOfBuffer) if self.eof_after_buffer => return Ok(None),
                     Err(Status::NeedMoreBytes) if self.eof_after_buffer => {
