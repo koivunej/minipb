@@ -162,11 +162,7 @@ impl Iterator for VarintBytes {
         } else {
             let ret = (self.0 & 0x7f) as u8;
             self.0 >>= 7;
-            Some(if self.0 != 0 {
-                ret | 0x80
-            } else {
-                ret
-            })
+            Some(if self.0 != 0 { ret | 0x80 } else { ret })
         }
     }
 }
