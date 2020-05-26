@@ -25,11 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let gatherer = GatheredFields::new(MerkleDag::Top, PBLinkGatherer::default());
     let mut reader = ReadWrapper::new(stdin.lock(), gatherer);
 
-    loop {
-        match reader.read_next()? {
-            Some(link) => println!("{:?}", link),
-            None => break,
-        }
+    while let Some(link) = reader.read_next()? {
+        println!("{:?}", link);
     }
 
     Ok(())
@@ -250,7 +247,7 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
             _ => None,
         };
 
-        return Ok(None);
+        Ok(None)
     }
 
     fn min_offset(&self) -> Option<u64> {

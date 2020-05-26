@@ -276,18 +276,16 @@ impl Matcher for PathMatcher {
             } else {
                 Action::Skip(Tag::Ignored)
             }
-        } else {
-            if read.field_id() == self.path[depth] {
-                if read.field_len() > 0 {
-                    // FIXME: this offset + bytes_to_skip needs to be easier to handle
-                    self.position.push(offset + read.bytes_to_skip());
-                    Action::Continue(Cont::Message(Some(Tag::Start)))
-                } else {
-                    Action::Skip(Tag::Ignored)
-                }
+        } else if read.field_id() == self.path[depth] {
+            if read.field_len() > 0 {
+                // FIXME: this offset + bytes_to_skip needs to be easier to handle
+                self.position.push(offset + read.bytes_to_skip());
+                Action::Continue(Cont::Message(Some(Tag::Start)))
             } else {
                 Action::Skip(Tag::Ignored)
             }
+        } else {
+            Action::Skip(Tag::Ignored)
         };
 
         // println!("offset = {}, {:?} ==> {:?}, path = {:?}", offset, read, decision, self.position);
