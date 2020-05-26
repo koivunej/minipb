@@ -1,0 +1,2 @@
+status = ["Continuous integration"]
+delete_merged_branches = true
