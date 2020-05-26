@@ -44,34 +44,8 @@ where
     /// # Safety
     ///
     /// The current implementation requires the use of `unsafe`, so this method might not be sound.
-    ///
-    /// Obvious misuse should however be guarded against:
-    ///
-    /// ```compile_fail
-    /// use std::{marker::PhantomData, io::Cursor};
-    /// use minipb::{DecodingError, Status, Reader};
-    /// use minipb::io_ext::read::ReadWrapper;
-    ///
-    /// #[derive(Default)]
-    /// struct NoopReader<'a> {
-    ///     ghost: std::marker::PhantomData<&'a ()>,
-    /// }
-    ///
-    /// impl<'a> Reader<'a> for NoopReader<'a> {
-    ///     type Returned = (); // it doesn't matter if Returned is 'static
-    ///     fn next(&mut self, buf: &mut &'a [u8]) -> Result<Result<(), Status>, DecodingError> {
-    ///         todo!()
-    ///     }
-    /// }
-    ///
-    /// let mut items = ReadWrapper::new(Cursor::new(vec![0u8]), NoopReader::default());
-    /// let first = items.read_next();
-    /// let second = items.read_next();
-    /// println!("{:?}, {:?}", first, second); // ERROR: cannot borrow `items` as mutable more than once at a time
-    /// ```
-    ///
-    /// FIXME: this might be used to implement Iterator?
-    #[cfg(not(polonius))]
+    /// Any obvious cases dont seem to compile, please see `tests/ui` for those and report an issue
+    /// if you find a new case which shouldn't work!
     pub fn read_next(&'a mut self) -> Result<Option<R::Returned>, ReadError> {
         use std::mem::transmute;
         loop {

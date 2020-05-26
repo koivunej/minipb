@@ -1,0 +1,10 @@
+error[E0597]: `rw` does not live long enough
+  --> $DIR/compile-fail-0.rs:20:5
+   |
+20 |     rw.read_next();
+   |     ^^------------
+   |     |
+   |     borrowed value does not live long enough
+   |     argument requires that `rw` is borrowed for `'static`
+21 | }
+   | - `rw` dropped here while still borrowed
