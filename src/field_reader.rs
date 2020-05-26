@@ -78,30 +78,23 @@ mod tests {
 
     #[test]
     fn read_basic_fields() {
+        use FieldValue::*;
         let expected = &[
-            (
-                FieldValue::Varint(42),
-                2, /* bytes consumed */
-                0, /* field len */
-            ),
-            (FieldValue::Varint(242), 3, 0),
-            (FieldValue::Varint(22242), 4, 0),
-            (FieldValue::Varint(2097153), 5, 0),
-            (FieldValue::Varint(268435457), 6, 0),
-            (FieldValue::Varint(34359738369), 7, 0),
-            (FieldValue::Varint(4398046511105), 8, 0),
-            (FieldValue::Varint(562949953421313), 9, 0),
-            (FieldValue::Varint(u64::max_value()), 11, 0),
-            (FieldValue::Fixed64(1), 9, 0),
-            (FieldValue::Fixed32(1), 5, 0),
-            (FieldValue::DataLength(1), 2, 1),
-            (FieldValue::DataLength(242), 3, 242),
-            (FieldValue::DataLength(22242), 4, 22242),
-            (
-                FieldValue::DataLength(u32::max_value()),
-                6,
-                u32::max_value() as usize,
-            ),
+            (Varint(42), 2, 0),
+            (Varint(242), 3, 0),
+            (Varint(22242), 4, 0),
+            (Varint(2097153), 5, 0),
+            (Varint(268435457), 6, 0),
+            (Varint(34359738369), 7, 0),
+            (Varint(4398046511105), 8, 0),
+            (Varint(562949953421313), 9, 0),
+            (Varint(u64::max_value()), 11, 0),
+            (Fixed64(1), 9, 0),
+            (Fixed32(1), 5, 0),
+            (DataLength(1), 2, 1),
+            (DataLength(242), 3, 242),
+            (DataLength(22242), 4, 22242),
+            (DataLength(u32::max_value()), 6, u32::max_value() as usize),
             // longer fields are not supported
         ];
 
