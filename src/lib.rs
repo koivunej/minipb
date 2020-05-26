@@ -113,17 +113,12 @@ enum FieldValue {
 
 #[cfg(test)]
 impl FieldValue {
-    fn output_with_field_id(
-        &self,
-        id: FieldId,
-        mut writer: impl std::io::Write,
-    ) -> std::io::Result<usize> {
+    fn output_with_field_id(&self, id: FieldId) -> impl Iterator<Item = u8> {
         use either::Either;
         use stackvector::StackVec;
         use FieldValue::*;
 
         // sorry, this is some maniac code right here. wanted to try this out
-
         let lowest_bits = match self {
             Varint(_) => 0,
             Fixed64(_) => 1,
@@ -150,16 +145,8 @@ impl FieldValue {
             DataLength(x) => Either::Left(varint_bytes(*x as u64)),
         };
 
-        let mut count = 0;
-
-        // also sorry the boring end, writing it byte by byte.
-
-        for byte in field_bytes.chain(payload) {
-            writer.write_all(&[byte])?;
-            count += 1;
-        }
-
-        Ok(count)
+        // so optimized.. </sarcasm> highly unlikely
+        field_bytes.chain(payload)
     }
 }
 
