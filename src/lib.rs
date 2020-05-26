@@ -128,12 +128,12 @@ impl FieldValue {
 
         let id = (id << 3) | lowest_bits;
 
-        let field_bytes = varint_bytes(id as u64);
+        let field_bytes = VarintBytes(id as u64);
 
         let mut tmp = StackVec::<[u8; 8]>::new();
 
         let payload = match self {
-            Varint(x) => Either::Left(varint_bytes(*x)),
+            Varint(x) => Either::Left(VarintBytes(*x)),
             Fixed64(x) => {
                 tmp.extend_from_slice(&x.to_le_bytes());
                 Either::Right(tmp.into_iter())
@@ -142,42 +142,39 @@ impl FieldValue {
                 tmp.extend_from_slice(&x.to_le_bytes());
                 Either::Right(tmp.into_iter())
             }
-            DataLength(x) => Either::Left(varint_bytes(*x as u64)),
+            DataLength(x) => Either::Left(VarintBytes(*x as u64)),
         };
 
-        // so optimized.. </sarcasm> highly unlikely
         field_bytes.chain(payload)
     }
 }
 
 #[cfg(test)]
-fn varint_bytes(varint: u64) -> impl Iterator<Item = u8> {
-    use std::iter::successors;
-    let first = Some((varint >> 7, (varint & 0x7f) as u8));
+struct VarintBytes(u64);
 
-    let bytes = successors(first, |&(remainder, _): &(u64, _)| {
-        if remainder == 0 {
+#[cfg(test)]
+impl Iterator for VarintBytes {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.0 == 0 {
             None
         } else {
-            Some((remainder >> 7, (remainder & 0x7f) as u8))
-        }
-    });
-
-    bytes.map(
-        |(remainder, byte)| {
-            if remainder != 0 {
-                byte | 0x80
+            let ret = (self.0 & 0x7f) as u8;
+            self.0 >>= 7;
+            Some(if self.0 != 0 {
+                ret | 0x80
             } else {
-                byte
-            }
-        },
-    )
+                ret
+            })
+        }
+    }
 }
 
 #[test]
 fn test_varint_bytes() {
-    assert_eq!(&varint_bytes(227).collect::<Vec<_>>(), &[0xe3, 0x01]);
-    assert_eq!(&varint_bytes(242).collect::<Vec<_>>(), &[0xf2, 0x01]);
+    assert_eq!(&VarintBytes(227).collect::<Vec<_>>(), &[0xe3, 0x01]);
+    assert_eq!(&VarintBytes(242).collect::<Vec<_>>(), &[0xf2, 0x01]);
 }
 
 /// All of the bytes still remaining in the buffer need to be kept, but more bytes should be read.
