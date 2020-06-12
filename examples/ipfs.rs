@@ -25,8 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let gatherer = GatheredFields::new(MerkleDag::Top, PBLinkGatherer::default());
     let mut reader = ReadWrapper::new(stdin.lock(), gatherer);
 
+    let mut links = Vec::new();
+
     while let Some(link) = reader.read_next()? {
         println!("{:?}", link);
+        links.push(link);
     }
 
     Ok(())
@@ -168,7 +171,7 @@ struct PBLinkGatherer {
 
 impl<'a> Gatherer<'a> for PBLinkGatherer {
     type Tag = DagPbElement;
-    type Returned = PBLink<'a>;
+    type Returned = PBLink<'static>;
 
     fn update(
         &mut self,
@@ -192,9 +195,9 @@ impl<'a> Gatherer<'a> for PBLinkGatherer {
                 );
 
                 if let (Some(start), Some(hr), Some(nr), Some(total_size)) = values {
-                    let hash = Cow::Borrowed(slicer.as_slice(&hr));
+                    let hash = Cow::Owned(slicer.as_slice(&hr).to_owned());
                     let name = slicer.as_slice(&nr);
-                    let name = Cow::Borrowed(std::str::from_utf8(name).unwrap());
+                    let name = Cow::Owned(std::str::from_utf8(name).unwrap().to_owned());
 
                     return Ok(Some(PBLink {
                         offset: start..offset,
