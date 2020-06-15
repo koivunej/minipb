@@ -131,20 +131,35 @@ mod tests {
         assert_eq!(f.consumed, 2);
         assert_eq!(f.field_id(), 1);
         assert_eq!(f.field_len(), 32);
-        assert!(matches!(f.value(), FieldValue::DataLength(32)), "{:?}", f.value());
+        assert!(
+            matches!(f.value(), FieldValue::DataLength(32)),
+            "{:?}",
+            f.value()
+        );
 
         let f = fr.next(&input[2..]).unwrap().unwrap();
         assert_eq!(f.consumed, 2);
         assert_eq!(f.field_id(), 1);
         assert_eq!(f.field_len(), 0); // well this is a bit interesting value..?
-        assert!(matches!(f.value(), FieldValue::Varint(4)), "{:?}", f.value());
+        assert!(
+            matches!(f.value(), FieldValue::Varint(4)),
+            "{:?}",
+            f.value()
+        );
 
         let f = fr.next(&input[4..]).unwrap().unwrap();
         assert_eq!(f.consumed, 2);
         assert_eq!(f.field_id(), 2);
         assert_eq!(f.field_len(), 28);
-        assert!(matches!(f.value(), FieldValue::DataLength(28)), "{:?}", f.value());
+        assert!(
+            matches!(f.value(), FieldValue::DataLength(28)),
+            "{:?}",
+            f.value()
+        );
 
-        assert_eq!(std::str::from_utf8(&input[6..]), Ok("../../../arch/arm64/boot/dts"));
+        assert_eq!(
+            std::str::from_utf8(&input[6..]),
+            Ok("../../../arch/arm64/boot/dts")
+        );
     }
 }
