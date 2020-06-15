@@ -74,6 +74,7 @@ impl FieldReader {
 mod tests {
     use super::FieldReader;
     use crate::{FieldValue, Status};
+    use hex_literal::hex;
 
     #[test]
     fn read_basic_fields() {
@@ -118,5 +119,47 @@ mod tests {
 
             buffer.clear();
         }
+    }
+
+    #[test]
+    fn read_good_pb() {
+        let input = hex!("0a200804121c2e2e2f2e2e2f2e2e2f617263682f61726d36342f626f6f742f647473");
+
+        let mut fr = FieldReader::default();
+
+        let f = fr.next(&input[..]).unwrap().unwrap();
+        assert_eq!(f.consumed, 2);
+        assert_eq!(f.field_id(), 1);
+        assert_eq!(f.field_len(), 32);
+        assert!(
+            matches!(f.value(), FieldValue::DataLength(32)),
+            "{:?}",
+            f.value()
+        );
+
+        let f = fr.next(&input[2..]).unwrap().unwrap();
+        assert_eq!(f.consumed, 2);
+        assert_eq!(f.field_id(), 1);
+        assert_eq!(f.field_len(), 0); // well this is a bit interesting value..?
+        assert!(
+            matches!(f.value(), FieldValue::Varint(4)),
+            "{:?}",
+            f.value()
+        );
+
+        let f = fr.next(&input[4..]).unwrap().unwrap();
+        assert_eq!(f.consumed, 2);
+        assert_eq!(f.field_id(), 2);
+        assert_eq!(f.field_len(), 28);
+        assert!(
+            matches!(f.value(), FieldValue::DataLength(28)),
+            "{:?}",
+            f.value()
+        );
+
+        assert_eq!(
+            std::str::from_utf8(&input[6..]),
+            Ok("../../../arch/arm64/boot/dts")
+        );
     }
 }
