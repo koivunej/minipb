@@ -46,6 +46,10 @@ impl ReadField<'_> {
             _ => false,
         }
     }
+
+    pub fn value(&self) -> &FieldValue {
+        &self.field.value
+    }
 }
 
 #[derive(Debug)]
@@ -101,7 +105,7 @@ impl FieldInfo {
 }
 
 #[derive(Debug)]
-enum FieldValue {
+pub enum FieldValue {
     Varint(u64),
     Fixed64(u64),
     Fixed32(u32),
